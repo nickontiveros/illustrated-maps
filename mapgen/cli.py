@@ -1430,43 +1430,54 @@ def compose(
     console.print(f"[bold]Landmarks:[/bold] {len(landmarks)}")
 
     # Create composition service
-    composition = CompositionService(
-        bbox=project.region,
-        output_size=(base_image.width, base_image.height),
-    )
+    composition = CompositionService()
+    base_map_size = (base_image.width, base_image.height)
 
-    # Load illustrated landmarks
-    illustrated = {}
-    logos = {}
+    # Load and place landmarks
+    placed_landmarks = []
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        task = progress.add_task("Loading landmark images...", total=len(landmarks))
+        task = progress.add_task("Loading and placing landmarks...", total=len(landmarks))
 
         for landmark in landmarks:
             # Load illustrated image
-            img = landmark_service.load_illustrated(landmark)
-            if img is not None:
-                illustrated[landmark.name] = img
+            illustration = landmark_service.load_illustrated(landmark)
+            if illustration is None:
+                console.print(f"[yellow]Skipping {landmark.name} - no illustration found[/yellow]")
+                progress.advance(task)
+                continue
 
-            # Load logo if enabled
+            # Place landmark on map
+            placed = composition.place_landmark(
+                landmark=landmark,
+                illustration=illustration,
+                base_map_size=base_map_size,
+                bbox=project.region,
+            )
+
+            # Load and place logo if enabled
             if with_logos:
                 logo = landmark_service.load_logo(landmark)
                 if logo is not None:
-                    logos[landmark.name] = logo
+                    composition.place_logo(placed, logo, max_width=300)
 
+            placed_landmarks.append(placed)
             progress.advance(task)
 
-    console.print(f"[dim]Loaded {len(illustrated)} illustrated, {len(logos)} logos[/dim]")
+    console.print(f"[dim]Placed {len(placed_landmarks)} landmarks[/dim]")
 
-    if not illustrated:
+    if not placed_landmarks:
         console.print("[yellow]No illustrated landmarks found. Run illustrate-landmarks first.[/yellow]")
         return
 
-    # Composite
+    # Avoid logo collisions
+    placed_landmarks = composition.avoid_collisions(placed_landmarks, base_map_size)
+
+    # Composite onto base map
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -1474,11 +1485,9 @@ def compose(
     ) as progress:
         task = progress.add_task("Compositing landmarks...", total=None)
 
-        result = composition.compose_landmarks(
-            base_image=base_image,
-            landmarks=landmarks,
-            illustrations=illustrated,
-            logos=logos if with_logos else {},
+        result = composition.composite_map(
+            base_map=base_image,
+            placed_landmarks=placed_landmarks,
             add_shadows=with_shadows,
         )
 
@@ -1667,23 +1676,33 @@ def generate_full(
     if landmarks:
         console.print("\n[bold cyan]Phase 4: Compositing landmarks[/bold cyan]")
 
-        composition = CompositionService(
-            bbox=project.region,
-            output_size=(base_map.width, base_map.height),
-        )
+        composition = CompositionService()
+        base_map_size = (base_map.width, base_map.height)
 
-        # Load illustrated images
-        illustrated = {}
-        logos = {}
+        # Place landmarks
+        placed_landmarks = []
         for landmark in landmarks:
-            img = landmark_service.load_illustrated(landmark)
-            if img is not None:
-                illustrated[landmark.name] = img
+            illustration = landmark_service.load_illustrated(landmark)
+            if illustration is None:
+                continue
+
+            placed = composition.place_landmark(
+                landmark=landmark,
+                illustration=illustration,
+                base_map_size=base_map_size,
+                bbox=project.region,
+            )
+
             logo = landmark_service.load_logo(landmark)
             if logo is not None:
-                logos[landmark.name] = logo
+                composition.place_logo(placed, logo, max_width=300)
 
-        if illustrated:
+            placed_landmarks.append(placed)
+
+        if placed_landmarks:
+            # Avoid collisions and composite
+            placed_landmarks = composition.avoid_collisions(placed_landmarks, base_map_size)
+
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -1691,15 +1710,13 @@ def generate_full(
             ) as progress:
                 task = progress.add_task("Compositing...", total=None)
 
-                final_image = composition.compose_landmarks(
-                    base_image=base_map,
-                    landmarks=landmarks,
-                    illustrations=illustrated,
-                    logos=logos,
+                final_image = composition.composite_map(
+                    base_map=base_map,
+                    placed_landmarks=placed_landmarks,
                     add_shadows=True,
                 )
 
-                progress.update(task, completed=True, description="[green]Composition complete")
+                progress.update(task, completed=True, description="[green]Composition complete[/green]")
         else:
             console.print("[yellow]No illustrated landmarks to composite[/yellow]")
             final_image = base_map
