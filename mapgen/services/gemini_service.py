@@ -1,0 +1,415 @@
+"""Gemini AI image generation service.
+
+Uses the Google GenAI SDK for image generation with Gemini 2.0 Flash
+or newer models that support native image output.
+"""
+
+import base64
+import os
+import time
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
+from typing import Optional
+
+from PIL import Image
+
+
+@dataclass
+class GenerationResult:
+    """Result from image generation."""
+
+    image: Image.Image
+    prompt_used: str
+    model: str
+    generation_time: float
+    tokens_used: Optional[int] = None
+
+
+class GeminiService:
+    """Service for AI image generation using Google Gemini.
+
+    Uses the newer google-genai SDK with native image generation support.
+    See: https://ai.google.dev/gemini-api/docs/image-generation
+    """
+
+    # Default style prompts for different generation modes
+    STYLE_PROMPTS = {
+        "base_map": (
+            "Transform this satellite/map image into a vibrant illustrated theme park "
+            "map style, similar to classic Disneyland park maps. Use a hand-painted "
+            "illustration aesthetic with warm, saturated colors. Maintain the aerial "
+            "view perspective showing the landscape from above. Keep the exact layout "
+            "of roads, buildings, water features, and parks visible in the reference. "
+            "Roads should be clearly visible as white or cream colored paths. Buildings "
+            "should have warm tan/beige colors with subtle shadows. Water should be a "
+            "pleasant blue. Parks and grass should be vibrant green. Create clean edges "
+            "suitable for seamless tiling with adjacent map sections. Generate only the "
+            "illustrated map image, no text."
+        ),
+        "landmark": (
+            "Transform this building photograph into an illustrated theme park map "
+            "style, matching the vibrant hand-painted aesthetic of Disneyland maps. "
+            "Create an isometric view of the building with simplified but recognizable "
+            "architectural details. Use warm, saturated colors with subtle shadows. "
+            "The illustration should look like it belongs on a theme park map, slightly "
+            "exaggerated in scale and detail for visual appeal. Remove the background "
+            "and create clean edges. Generate only the illustrated building, no text."
+        ),
+        "inpaint_seam": (
+            "Seamlessly blend these two map sections together. Match the illustrated "
+            "theme park map style with consistent colors, textures, and details across "
+            "the seam. Ensure roads, paths, and features connect smoothly without any "
+            "visible transition line. Generate only the blended image, no text."
+        ),
+    }
+
+    # Model configurations
+    MODELS = {
+        "gemini-3-pro-image-preview": {
+            "max_size": 2048,
+            "supports_image_input": True,
+            "supports_image_output": True,
+        },
+        "gemini-2.0-flash-exp": {
+            "max_size": 2048,
+            "supports_image_input": True,
+            "supports_image_output": True,
+        },
+        "gemini-2.5-flash-preview-05-20": {
+            "max_size": 2048,
+            "supports_image_input": True,
+            "supports_image_output": True,
+        },
+    }
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-3-pro-image-preview",
+    ):
+        """
+        Initialize Gemini service.
+
+        Args:
+            api_key: Google API key (or set GOOGLE_API_KEY env var)
+            model: Model to use for generation (default: gemini-2.0-flash-exp)
+        """
+        self.api_key = api_key or os.environ.get("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "Google API key required. Set GOOGLE_API_KEY environment variable "
+                "or pass api_key parameter."
+            )
+
+        self.model = model
+        self._client = None
+
+    @property
+    def client(self):
+        """Lazy initialization of GenAI client."""
+        if self._client is None:
+            from google import genai
+
+            self._client = genai.Client(api_key=self.api_key)
+        return self._client
+
+    def generate_base_tile(
+        self,
+        reference_image: Image.Image,
+        style_prompt: Optional[str] = None,
+        terrain_description: Optional[str] = None,
+        tile_position: Optional[str] = None,
+    ) -> GenerationResult:
+        """
+        Generate an illustrated map tile from a reference image.
+
+        Args:
+            reference_image: Base map render (satellite + OSM composite)
+            style_prompt: Custom style prompt (uses default if None)
+            terrain_description: Optional terrain description to include
+            tile_position: Optional position info (e.g., "top-left corner")
+
+        Returns:
+            GenerationResult with generated image
+        """
+        from google.genai import types
+
+        # Build prompt
+        prompt = style_prompt or self.STYLE_PROMPTS["base_map"]
+
+        if terrain_description:
+            prompt += f"\n\nTerrain characteristics: {terrain_description}"
+
+        if tile_position:
+            prompt += f"\n\nThis is the {tile_position} section of the map."
+
+        # Resize image if needed (max 2048 for most models)
+        max_size = self.MODELS.get(self.model, {}).get("max_size", 2048)
+        if reference_image.width > max_size or reference_image.height > max_size:
+            reference_image = reference_image.copy()
+            reference_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+        start_time = time.time()
+
+        # Generate with image input using new SDK
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[reference_image, prompt],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+
+        generation_time = time.time() - start_time
+
+        # Extract image from response
+        generated_image = self._extract_image_from_response(response)
+
+        return GenerationResult(
+            image=generated_image,
+            prompt_used=prompt,
+            model=self.model,
+            generation_time=generation_time,
+        )
+
+    def stylize_landmark(
+        self,
+        photo: Image.Image,
+        style_reference: Optional[Image.Image] = None,
+        landmark_name: Optional[str] = None,
+        style_prompt: Optional[str] = None,
+    ) -> GenerationResult:
+        """
+        Transform a landmark photo into illustrated style.
+
+        Args:
+            photo: Landmark photograph
+            style_reference: Optional reference image for style matching
+            landmark_name: Name of the landmark for context
+            style_prompt: Custom style prompt
+
+        Returns:
+            GenerationResult with illustrated landmark
+        """
+        from google.genai import types
+
+        # Build prompt
+        prompt = style_prompt or self.STYLE_PROMPTS["landmark"]
+
+        if landmark_name:
+            prompt += f"\n\nThis is the {landmark_name}."
+
+        start_time = time.time()
+
+        # If style reference provided, include it
+        if style_reference:
+            full_prompt = f"Transform the first image to match the illustrated style of the second image. {prompt}"
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[photo, style_reference, full_prompt],
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                ),
+            )
+        else:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[photo, prompt],
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                ),
+            )
+
+        generation_time = time.time() - start_time
+
+        generated_image = self._extract_image_from_response(response)
+
+        return GenerationResult(
+            image=generated_image,
+            prompt_used=prompt,
+            model=self.model,
+            generation_time=generation_time,
+        )
+
+    def inpaint_seam(
+        self,
+        tile_a: Image.Image,
+        tile_b: Image.Image,
+        overlap_region: tuple[int, int, int, int],
+        orientation: str = "horizontal",
+    ) -> GenerationResult:
+        """
+        Inpaint seam between two tiles.
+
+        Args:
+            tile_a: First tile image
+            tile_b: Second tile image
+            overlap_region: (x, y, width, height) of overlap region
+            orientation: "horizontal" or "vertical" seam
+
+        Returns:
+            GenerationResult with inpainted overlap region
+        """
+        from google.genai import types
+
+        # Extract overlap regions from both tiles
+        x, y, w, h = overlap_region
+
+        if orientation == "horizontal":
+            # Tiles are side by side
+            region_a = tile_a.crop((tile_a.width - w, y, tile_a.width, y + h))
+            region_b = tile_b.crop((0, y, w, y + h))
+        else:
+            # Tiles are stacked vertically
+            region_a = tile_a.crop((x, tile_a.height - h, x + w, tile_a.height))
+            region_b = tile_b.crop((x, 0, x + w, h))
+
+        # Combine regions for context
+        if orientation == "horizontal":
+            combined = Image.new("RGB", (w * 2, h))
+            combined.paste(region_a, (0, 0))
+            combined.paste(region_b, (w, 0))
+        else:
+            combined = Image.new("RGB", (w, h * 2))
+            combined.paste(region_a, (0, 0))
+            combined.paste(region_b, (0, h))
+
+        prompt = self.STYLE_PROMPTS["inpaint_seam"]
+
+        start_time = time.time()
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[combined, prompt],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+
+        generation_time = time.time() - start_time
+
+        generated_image = self._extract_image_from_response(response)
+
+        return GenerationResult(
+            image=generated_image,
+            prompt_used=prompt,
+            model=self.model,
+            generation_time=generation_time,
+        )
+
+    def generate_text_to_image(
+        self,
+        prompt: str,
+        width: int = 1024,
+        height: int = 1024,
+    ) -> GenerationResult:
+        """
+        Generate an image from text prompt only.
+
+        Args:
+            prompt: Text description of desired image
+            width: Output width
+            height: Output height
+
+        Returns:
+            GenerationResult with generated image
+        """
+        from google.genai import types
+
+        start_time = time.time()
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+
+        generation_time = time.time() - start_time
+
+        generated_image = self._extract_image_from_response(response)
+
+        # Resize if needed
+        if generated_image.size != (width, height):
+            generated_image = generated_image.resize(
+                (width, height), Image.Resampling.LANCZOS
+            )
+
+        return GenerationResult(
+            image=generated_image,
+            prompt_used=prompt,
+            model=self.model,
+            generation_time=generation_time,
+        )
+
+    def _extract_image_from_response(self, response) -> Image.Image:
+        """Extract PIL Image from Gemini response.
+
+        The new google-genai SDK returns image data in parts with inline_data.
+        The data is already bytes, not base64 encoded.
+        """
+        # Handle new SDK response format
+        if hasattr(response, "candidates") and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                for part in candidate.content.parts:
+                    if hasattr(part, "inline_data") and part.inline_data is not None:
+                        # New SDK returns bytes directly
+                        image_data = part.inline_data.data
+                        if isinstance(image_data, bytes):
+                            return Image.open(BytesIO(image_data)).convert("RGBA")
+                        elif isinstance(image_data, str):
+                            # Fall back to base64 decode if string
+                            return Image.open(BytesIO(base64.b64decode(image_data))).convert("RGBA")
+
+        # Try alternate response structures for older SDK compatibility
+        if hasattr(response, "images") and response.images:
+            image_data = response.images[0]
+            if isinstance(image_data, bytes):
+                return Image.open(BytesIO(image_data)).convert("RGBA")
+            elif isinstance(image_data, str):
+                return Image.open(BytesIO(base64.b64decode(image_data))).convert("RGBA")
+
+        # Check if response has parts directly
+        if hasattr(response, "parts"):
+            for part in response.parts:
+                if hasattr(part, "inline_data") and part.inline_data is not None:
+                    image_data = part.inline_data.data
+                    if isinstance(image_data, bytes):
+                        return Image.open(BytesIO(image_data)).convert("RGBA")
+
+        raise ValueError(
+            f"Could not extract image from Gemini response. "
+            f"Response type: {type(response)}, "
+            f"Has candidates: {hasattr(response, 'candidates')}"
+        )
+
+    def estimate_cost(self, num_tiles: int, num_landmarks: int) -> dict:
+        """
+        Estimate generation costs.
+
+        Args:
+            num_tiles: Number of base map tiles
+            num_landmarks: Number of landmarks
+
+        Returns:
+            Cost estimate dictionary
+        """
+        # Approximate costs (these may change)
+        cost_per_image = 0.13  # USD
+
+        tile_cost = num_tiles * cost_per_image
+        landmark_cost = num_landmarks * cost_per_image
+        # Estimate seam repairs at ~20% of tiles
+        seam_cost = int(num_tiles * 0.2) * cost_per_image
+
+        return {
+            "tile_cost": tile_cost,
+            "landmark_cost": landmark_cost,
+            "seam_cost": seam_cost,
+            "total_cost": tile_cost + landmark_cost + seam_cost,
+            "num_tiles": num_tiles,
+            "num_landmarks": num_landmarks,
+        }

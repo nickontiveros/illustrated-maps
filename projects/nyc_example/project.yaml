@@ -1,0 +1,53 @@
+name: "NYC Illustrated Map"
+region:
+  # Lower Manhattan area
+  north: 40.7580
+  south: 40.7000
+  east: -73.9700
+  west: -74.0200
+
+output:
+  width: 7016    # A1 @ 300 DPI
+  height: 9933
+  dpi: 300
+
+style:
+  perspective_angle: 35.264
+  prompt: |
+    Transform this map into a vibrant illustrated theme park map style,
+    similar to classic Disneyland park maps. Use a hand-painted illustration
+    aesthetic with warm, saturated colors. The map should have an isometric
+    aerial view perspective. Maintain the exact layout of roads, buildings,
+    water features, and parks. Roads should be clearly visible as white or
+    cream colored paths. Buildings should have a warm tan/beige color with
+    subtle shadows. Water should be a pleasant blue. Parks and grass should
+    be vibrant green. Create clean edges suitable for seamless tiling.
+
+tiles:
+  size: 2048
+  overlap: 256
+
+landmarks:
+  - name: "Empire State Building"
+    latitude: 40.7484
+    longitude: -73.9857
+    photo: "landmarks/Empire_State_Building.jpg"
+    logo: "logos/empire_state.png"
+    scale: 2.5
+    z_index: 10
+
+  - name: "Chrysler Building"
+    latitude: 40.7516
+    longitude: -73.9755
+    photo: "landmarks/Chrysler_Building.jpg"
+    logo: "logos/chrysler.png"
+    scale: 2.2
+    z_index: 9
+
+  - name: "One World Trade Center"
+    latitude: 40.7127
+    longitude: -74.0134
+    photo: "landmarks/One_World_Trade_Center_Building.jpg"
+    logo: "logos/wtc.png"
+    scale: 2.8
+    z_index: 10

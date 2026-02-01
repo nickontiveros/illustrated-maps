@@ -1,0 +1,55 @@
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project outputs - regeneratable
+projects/*/output/
+projects/*/landmarks/*.png
+projects/*/landmarks/*.jpg
+projects/*/logos/
+
+# Cache
+.cache/
+*.cache
+
+# Reference images (examples in root)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+!mapgen/**/*.png
+
+# Large files
+*.psd
+*.ai
+
+# Zone identifiers (Windows)
+*:Zone.Identifier
+
+# Claude Code
+.claude/
