@@ -1392,20 +1392,35 @@ def illustrate_landmarks(
 @click.option("--output", "-o", type=click.Path(), help="Output file path")
 @click.option("--with-logos/--no-logos", default=True, help="Include logos next to landmarks")
 @click.option("--with-shadows/--no-shadows", default=True, help="Add drop shadows")
+@click.option("--perspective/--no-perspective", default=True,
+              help="Apply perspective transform to landmark positions (for perspective maps)")
+@click.option("--convergence", type=float, default=0.7,
+              help="Perspective convergence (must match map generation)")
+@click.option("--vertical-scale", type=float, default=0.4,
+              help="Perspective vertical scale (must match map generation)")
+@click.option("--horizon-margin", type=float, default=0.15,
+              help="Perspective horizon margin (must match map generation)")
 def compose(
     project_path: str,
     base_map: str,
     output: Optional[str],
     with_logos: bool,
     with_shadows: bool,
+    perspective: bool,
+    convergence: float,
+    vertical_scale: float,
+    horizon_margin: float,
 ):
     """Composite illustrated landmarks onto base map.
 
     Places landmarks at their GPS coordinates with optional logos and shadows.
+    For perspective-warped maps, use --perspective to adjust landmark positions
+    and scales to match the map's perspective.
 
     Examples:
         mapgen compose project/ --base-map output/illustrated.png
         mapgen compose project/ -b output/illustrated.png -o final.png --no-logos
+        mapgen compose project/ -b output/flat.png --no-perspective
     """
     from .services.composition_service import CompositionService
     from .services.landmark_service import LandmarkService
@@ -1428,9 +1443,14 @@ def compose(
     console.print(f"[bold]Base map:[/bold] {base_map}")
     console.print(f"[bold]Size:[/bold] {base_image.width} x {base_image.height}")
     console.print(f"[bold]Landmarks:[/bold] {len(landmarks)}")
+    console.print(f"[bold]Perspective:[/bold] {'enabled' if perspective else 'disabled'}")
 
-    # Create composition service
-    composition = CompositionService()
+    # Create composition service with perspective parameters
+    composition = CompositionService(
+        perspective_convergence=convergence,
+        perspective_vertical_scale=vertical_scale,
+        perspective_horizon_margin=horizon_margin,
+    )
     base_map_size = (base_image.width, base_image.height)
 
     # Load and place landmarks
@@ -1451,12 +1471,14 @@ def compose(
                 progress.advance(task)
                 continue
 
-            # Place landmark on map
+            # Place landmark on map with perspective adjustment
             placed = composition.place_landmark(
                 landmark=landmark,
                 illustration=illustration,
                 base_map_size=base_map_size,
                 bbox=project.region,
+                apply_perspective=perspective,
+                remove_background=True,
             )
 
             # Load and place logo if enabled
@@ -1676,10 +1698,15 @@ def generate_full(
     if landmarks:
         console.print("\n[bold cyan]Phase 4: Compositing landmarks[/bold cyan]")
 
-        composition = CompositionService()
+        # Use perspective parameters matching the map generation
+        composition = CompositionService(
+            perspective_convergence=0.7,
+            perspective_vertical_scale=0.4,
+            perspective_horizon_margin=0.15,
+        )
         base_map_size = (base_map.width, base_map.height)
 
-        # Place landmarks
+        # Place landmarks with perspective adjustment
         placed_landmarks = []
         for landmark in landmarks:
             illustration = landmark_service.load_illustrated(landmark)
@@ -1691,6 +1718,8 @@ def generate_full(
                 illustration=illustration,
                 base_map_size=base_map_size,
                 bbox=project.region,
+                apply_perspective=perspective,
+                remove_background=True,
             )
 
             logo = landmark_service.load_logo(landmark)

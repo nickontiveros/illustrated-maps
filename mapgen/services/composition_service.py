@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from ..models.landmark import Landmark
 from ..models.project import BoundingBox
 from ..utils.geo_utils import gps_to_pixel
-from ..utils.image_utils import apply_drop_shadow, blend_images
+from ..utils.image_utils import apply_drop_shadow, blend_images, create_alpha_mask
 
 
 @dataclass
@@ -27,9 +27,24 @@ class PlacedLandmark:
 class CompositionService:
     """Service for compositing landmarks and labels onto the base map."""
 
-    def __init__(self):
-        """Initialize composition service."""
+    def __init__(
+        self,
+        perspective_convergence: float = 0.7,
+        perspective_vertical_scale: float = 0.4,
+        perspective_horizon_margin: float = 0.15,
+    ):
+        """
+        Initialize composition service.
+
+        Args:
+            perspective_convergence: How much the top narrows (0.0-1.0)
+            perspective_vertical_scale: Vertical compression at top (0.0-1.0)
+            perspective_horizon_margin: Extra space at top for horizon
+        """
         self.placed_landmarks: list[PlacedLandmark] = []
+        self.convergence = perspective_convergence
+        self.vertical_scale = perspective_vertical_scale
+        self.horizon_margin = perspective_horizon_margin
 
     def place_landmark(
         self,
@@ -38,6 +53,8 @@ class CompositionService:
         base_map_size: tuple[int, int],
         bbox: BoundingBox,
         isometric_matrix: Optional[np.ndarray] = None,
+        apply_perspective: bool = True,
+        remove_background: bool = True,
     ) -> PlacedLandmark:
         """
         Calculate placement position for a landmark.
@@ -48,34 +65,62 @@ class CompositionService:
             base_map_size: (width, height) of base map
             bbox: Map bounding box
             isometric_matrix: Optional transformation matrix
+            apply_perspective: Whether to transform coords for perspective map
+            remove_background: Whether to remove white/light backgrounds
 
         Returns:
             PlacedLandmark with calculated position
         """
-        # Convert GPS to pixel coordinates
-        pixel_x, pixel_y = gps_to_pixel(
+        width, height = base_map_size
+
+        # Remove background if requested (fix transparency issues)
+        if remove_background:
+            illustration = self._remove_background(illustration)
+
+        # First, get flat GPS to pixel coordinates (before perspective)
+        # We need to work with the original flat map size
+        if apply_perspective:
+            # Calculate original flat map height (before horizon margin was added)
+            flat_height = int(height / (1 + self.horizon_margin))
+            flat_size = (width, flat_height)
+        else:
+            flat_size = base_map_size
+
+        # Convert GPS to flat pixel coordinates
+        flat_x, flat_y = gps_to_pixel(
             landmark.latitude,
             landmark.longitude,
             bbox,
-            base_map_size,
+            flat_size,
             isometric_matrix,
         )
 
-        # Apply scale factor
-        scale = landmark.scale
-        new_width = int(illustration.width * scale)
-        new_height = int(illustration.height * scale)
+        # Now apply perspective transformation if the map has perspective
+        if apply_perspective:
+            pixel_x, pixel_y = self._apply_perspective_to_coords(
+                flat_x, flat_y, flat_size
+            )
+            # Calculate perspective scale factor (smaller at top, larger at bottom)
+            perspective_scale = self._get_perspective_scale(flat_y, flat_size[1])
+        else:
+            pixel_x, pixel_y = flat_x, flat_y
+            perspective_scale = 1.0
 
-        if scale != 1.0:
+        # Apply user scale factor AND perspective scale
+        total_scale = landmark.scale * perspective_scale
+        new_width = int(illustration.width * total_scale)
+        new_height = int(illustration.height * total_scale)
+
+        if total_scale != 1.0:
             illustration = illustration.resize(
                 (new_width, new_height),
                 Image.Resampling.LANCZOS,
             )
 
-        # Center the landmark on its position
+        # Center the landmark horizontally, anchor bottom at GPS point
         position = (
-            pixel_x - new_width // 2,
-            pixel_y - new_height,  # Bottom of landmark at GPS point
+            int(pixel_x - new_width // 2),
+            int(pixel_y - new_height),  # Bottom of landmark at GPS point
         )
 
         placed = PlacedLandmark(
@@ -87,6 +132,116 @@ class CompositionService:
 
         self.placed_landmarks.append(placed)
         return placed
+
+    def _remove_background(
+        self,
+        image: Image.Image,
+        threshold: int = 240,
+        feather: int = 2,
+    ) -> Image.Image:
+        """
+        Remove white/light backgrounds from an image.
+
+        Args:
+            image: Input image
+            threshold: Brightness threshold for background detection
+            feather: Feather radius for smooth edges
+
+        Returns:
+            Image with transparent background
+        """
+        if image.mode != "RGBA":
+            image = image.convert("RGBA")
+
+        # Convert to numpy for processing
+        data = np.array(image)
+
+        # Calculate brightness of each pixel
+        rgb = data[:, :, :3].astype(float)
+        brightness = rgb.mean(axis=2)
+
+        # Create mask: 0 for background (bright pixels), 255 for foreground
+        mask = np.where(brightness < threshold, 255, 0).astype(np.uint8)
+
+        # Also preserve existing alpha
+        existing_alpha = data[:, :, 3]
+        mask = np.minimum(mask, existing_alpha)
+
+        # Apply feathering for smooth edges
+        mask_img = Image.fromarray(mask)
+        if feather > 0:
+            mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=feather))
+
+        # Apply the mask
+        result = image.copy()
+        result.putalpha(mask_img)
+
+        return result
+
+    def _apply_perspective_to_coords(
+        self,
+        x: float,
+        y: float,
+        flat_size: tuple[int, int],
+    ) -> tuple[float, float]:
+        """
+        Transform coordinates from flat map space to perspective map space.
+
+        Args:
+            x: X coordinate in flat map
+            y: Y coordinate in flat map
+            flat_size: (width, height) of flat map
+
+        Returns:
+            (x, y) in perspective map coordinates
+        """
+        width, height = flat_size
+
+        # Calculate output dimensions (with horizon margin)
+        margin_pixels = int(height * self.horizon_margin)
+
+        # Calculate perspective parameters
+        top_inset = (width * (1 - self.convergence)) / 2
+
+        # Normalize y position (0 = top, 1 = bottom)
+        y_norm = y / height
+
+        # Interpolate x inset based on y position
+        # At y=0 (top), full inset; at y=height (bottom), no inset
+        x_inset = top_inset * (1 - y_norm)
+
+        # Calculate new x position
+        scale_at_y = 1 - (1 - self.convergence) * (1 - y_norm)
+        new_x = x_inset + x * scale_at_y
+
+        # Calculate new y position (compressed at top)
+        y_scale = self.vertical_scale + (1 - self.vertical_scale) * y_norm
+        new_y = margin_pixels + y * y_scale
+
+        return (new_x, new_y)
+
+    def _get_perspective_scale(self, flat_y: float, flat_height: int) -> float:
+        """
+        Calculate scale factor based on position in perspective.
+
+        Objects at the top (far away) should be smaller.
+        Objects at the bottom (close) should be larger.
+
+        Args:
+            flat_y: Y position in flat map coordinates
+            flat_height: Height of flat map
+
+        Returns:
+            Scale factor (0.0-1.0 range, typically convergence to 1.0)
+        """
+        # Normalize y: 0 = top (far), 1 = bottom (near)
+        y_norm = flat_y / flat_height
+
+        # Scale ranges from convergence (at top) to 1.0 (at bottom)
+        # This matches how the map itself is scaled
+        scale = self.convergence + (1.0 - self.convergence) * y_norm
+
+        return scale
 
     def place_logo(
         self,
