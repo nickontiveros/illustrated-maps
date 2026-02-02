@@ -142,6 +142,9 @@ class CompositionService:
         """
         Remove white/light backgrounds from an image.
 
+        Also detects and removes checkerboard transparency patterns that
+        some AI generators produce instead of true transparency.
+
         Args:
             image: Input image
             threshold: Brightness threshold for background detection
@@ -155,13 +158,28 @@ class CompositionService:
 
         # Convert to numpy for processing
         data = np.array(image)
-
-        # Calculate brightness of each pixel
         rgb = data[:, :, :3].astype(float)
-        brightness = rgb.mean(axis=2)
 
-        # Create mask: 0 for background (bright pixels), 255 for foreground
-        mask = np.where(brightness < threshold, 255, 0).astype(np.uint8)
+        # Detect checkerboard pattern (alternating grey ~204 and white ~255)
+        # This happens when AI generators render "transparency" visually
+        has_checkerboard = self._detect_checkerboard(rgb)
+
+        if has_checkerboard:
+            # For checkerboard, remove both the grey (~190-210) and white (>240) pixels
+            grey_mask = (
+                (rgb[:, :, 0] > 185) & (rgb[:, :, 0] < 215) &
+                (rgb[:, :, 1] > 185) & (rgb[:, :, 1] < 215) &
+                (rgb[:, :, 2] > 185) & (rgb[:, :, 2] < 215)
+            )
+            white_mask = rgb.mean(axis=2) > threshold
+            background_mask = grey_mask | white_mask
+        else:
+            # Standard white background removal
+            brightness = rgb.mean(axis=2)
+            background_mask = brightness > threshold
+
+        # Create mask: 255 for foreground, 0 for background
+        mask = np.where(background_mask, 0, 255).astype(np.uint8)
 
         # Also preserve existing alpha
         existing_alpha = data[:, :, 3]
@@ -177,6 +195,37 @@ class CompositionService:
         result.putalpha(mask_img)
 
         return result
+
+    def _detect_checkerboard(
+        self,
+        rgb: np.ndarray,
+        grey_threshold: float = 0.02,
+    ) -> bool:
+        """
+        Detect if an image has a checkerboard transparency pattern.
+
+        Checkerboard patterns have alternating grey (~204,204,204) and
+        white (~255,255,255) pixels in a grid pattern.
+
+        Args:
+            rgb: RGB array of the image
+            grey_threshold: Minimum fraction of grey pixels to consider checkerboard
+
+        Returns:
+            True if checkerboard pattern detected
+        """
+        # Count grey pixels (~190-210 range, typical checkerboard grey)
+        grey_mask = (
+            (rgb[:, :, 0] > 185) & (rgb[:, :, 0] < 215) &
+            (rgb[:, :, 1] > 185) & (rgb[:, :, 1] < 215) &
+            (rgb[:, :, 2] > 185) & (rgb[:, :, 2] < 215)
+        )
+
+        grey_fraction = grey_mask.sum() / (rgb.shape[0] * rgb.shape[1])
+
+        # If more than 2% of pixels are in the grey range, likely checkerboard
+        # (Normal images rarely have this specific grey in large amounts)
+        return grey_fraction > grey_threshold
 
     def _apply_perspective_to_coords(
         self,
