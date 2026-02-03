@@ -44,12 +44,17 @@ def main():
 @click.option("--skip-tiles", is_flag=True, help="Skip tile generation (use cached)")
 @click.option("--skip-landmarks", is_flag=True, help="Skip landmark generation")
 @click.option("--preview-only", is_flag=True, help="Generate preview only (no full res)")
+@click.option("--detail-level", "-d",
+              type=click.Choice(["full", "simplified", "regional", "country", "auto"]),
+              default="auto",
+              help="OSM detail level (auto selects based on region size)")
 def generate(
     project_path: str,
     output: Optional[str],
     skip_tiles: bool,
     skip_landmarks: bool,
     preview_only: bool,
+    detail_level: str,
 ):
     """Generate an illustrated map from a project configuration."""
     project_file = Path(project_path)
@@ -78,6 +83,14 @@ def generate(
     console.print(f"[bold]Output size:[/bold] {project.output.width} x {project.output.height} px")
     console.print(f"[bold]Tile grid:[/bold] {cols} x {rows} = {total_tiles} tiles")
 
+    # Calculate region info and determine detail level
+    area_km2 = project.region.calculate_area_km2()
+    recommended_detail = project.region.get_recommended_detail_level()
+    actual_detail = recommended_detail.value if detail_level == "auto" else detail_level
+
+    console.print(f"[bold]Region area:[/bold] {area_km2:,.0f} km²")
+    console.print(f"[bold]Detail level:[/bold] {actual_detail}")
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -85,7 +98,7 @@ def generate(
     ) as progress:
         # Step 1: Fetch OSM data
         task = progress.add_task("Fetching OSM data...", total=None)
-        osm_data = _fetch_osm_data(project)
+        osm_data = _fetch_osm_data(project, detail_level=actual_detail)
         progress.update(task, completed=True, description="[green]OSM data fetched")
 
         # Step 2: Fetch elevation data
