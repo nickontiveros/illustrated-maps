@@ -14,13 +14,16 @@ from typing import Callable, Optional
 
 from PIL import Image
 
-from ..models.project import BoundingBox, Project
+from ..models.project import BoundingBox, DetailLevel, Project, get_recommended_detail_level
 from .blending_service import BlendingService, TileInfo
 from .gemini_service import GeminiService, GenerationResult
 from .osm_service import OSMData, OSMService
 from .perspective_service import PerspectiveService
 from .render_service import RenderService
 from .satellite_service import SatelliteService
+
+# Area threshold for per-tile OSM fetching (in km²)
+PER_TILE_OSM_THRESHOLD = 10_000
 
 
 @dataclass
@@ -84,6 +87,7 @@ class GenerationService:
         satellite_service: Optional[SatelliteService] = None,
         osm_service: Optional[OSMService] = None,
         cache_dir: Optional[Path] = None,
+        detail_level: Optional[DetailLevel] = None,
     ):
         """
         Initialize generation service.
@@ -94,6 +98,7 @@ class GenerationService:
             satellite_service: Optional pre-configured satellite service
             osm_service: Optional pre-configured OSM service
             cache_dir: Directory for caching tiles
+            detail_level: Override detail level (auto-selected if None)
         """
         self.project = project
         self.cache_dir = cache_dir or (project.project_dir / "cache" if project.project_dir else None)
@@ -101,14 +106,35 @@ class GenerationService:
         if self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Calculate region area and determine detail level
+        self._region_area_km2 = project.region.calculate_area_km2()
+        self._detail_level = detail_level or project.region.get_recommended_detail_level()
+        self._use_per_tile_osm = self._region_area_km2 > PER_TILE_OSM_THRESHOLD
+
         # Initialize services lazily
         self._gemini = gemini_service
         self._satellite = satellite_service
         self._osm = osm_service
         self._blending = BlendingService()
 
-        # Cache for OSM data (same for all tiles)
+        # Cache for OSM data (for small regions, fetched once; for large regions, per-tile)
         self._osm_data: Optional[OSMData] = None
+        self._osm_tile_cache: dict[tuple[int, int], OSMData] = {}
+
+    @property
+    def region_area_km2(self) -> float:
+        """Return the region area in square kilometers."""
+        return self._region_area_km2
+
+    @property
+    def detail_level(self) -> DetailLevel:
+        """Return the detail level being used."""
+        return self._detail_level
+
+    @property
+    def uses_per_tile_osm(self) -> bool:
+        """Return whether per-tile OSM fetching is enabled."""
+        return self._use_per_tile_osm
 
     @property
     def gemini(self) -> GeminiService:
@@ -213,14 +239,58 @@ class GenerationService:
         else:
             return f"{v_pos}-{h_pos} corner"
 
-    def fetch_osm_data(self) -> OSMData:
-        """Fetch and cache OSM data for the entire region."""
-        if self._osm_data is None:
-            self._osm_data = self.osm.fetch_region_data(
-                self.project.region,
-                detail_level="simplified",
+    def fetch_osm_data(self, tile_bbox: Optional[BoundingBox] = None) -> OSMData:
+        """
+        Fetch and cache OSM data for the region or tile.
+
+        For small regions (< 10,000 km²), fetches once for entire region.
+        For large regions, fetches per-tile to avoid query size limits.
+
+        Args:
+            tile_bbox: Optional tile bounding box for per-tile fetching
+
+        Returns:
+            OSMData for the region or tile
+        """
+        if self._use_per_tile_osm and tile_bbox is not None:
+            # Per-tile OSM fetching for large regions
+            return self._fetch_osm_for_tile(tile_bbox)
+        else:
+            # Whole-region OSM fetching for small regions
+            if self._osm_data is None:
+                print(f"Fetching OSM data with detail level: {self._detail_level.value}")
+                self._osm_data = self.osm.fetch_region_data(
+                    self.project.region,
+                    detail_level=self._detail_level.value,
+                )
+            return self._osm_data
+
+    def _fetch_osm_for_tile(self, tile_bbox: BoundingBox) -> OSMData:
+        """
+        Fetch OSM data for a specific tile, with caching.
+
+        Args:
+            tile_bbox: Tile bounding box
+
+        Returns:
+            OSMData for the tile
+        """
+        # Create cache key from bbox (rounded to avoid float precision issues)
+        cache_key = (
+            round(tile_bbox.north, 4),
+            round(tile_bbox.south, 4),
+            round(tile_bbox.east, 4),
+            round(tile_bbox.west, 4),
+        )
+
+        if cache_key not in self._osm_tile_cache:
+            print(f"Fetching OSM data for tile bbox with detail level: {self._detail_level.value}")
+            self._osm_tile_cache[cache_key] = self.osm.fetch_region_data(
+                tile_bbox,
+                detail_level=self._detail_level.value,
             )
-        return self._osm_data
+
+        return self._osm_tile_cache[cache_key]
 
     def generate_tile_reference(
         self,
@@ -245,8 +315,8 @@ class GenerationService:
             output_size=(tile_size, tile_size),
         )
 
-        # Get OSM data (cached)
-        osm_data = self.fetch_osm_data()
+        # Get OSM data (cached, or per-tile for large regions)
+        osm_data = self.fetch_osm_data(tile_bbox=spec.bbox if self._use_per_tile_osm else None)
 
         # Create perspective and render services
         perspective = PerspectiveService(
@@ -358,8 +428,14 @@ class GenerationService:
         progress = GenerationProgress(total_tiles=len(specs))
         results = []
 
-        # Pre-fetch OSM data
-        self.fetch_osm_data()
+        # Log generation settings
+        print(f"Region area: {self._region_area_km2:,.0f} km²")
+        print(f"Detail level: {self._detail_level.value}")
+        print(f"Per-tile OSM: {'enabled' if self._use_per_tile_osm else 'disabled'}")
+
+        # Pre-fetch OSM data for small regions (large regions use per-tile fetching)
+        if not self._use_per_tile_osm:
+            self.fetch_osm_data()
 
         for spec in specs:
             progress.current_tile = spec
@@ -484,12 +560,23 @@ class GenerationService:
         image.save(cache_path)
 
     def estimate_cost(self) -> dict:
-        """Estimate generation costs."""
+        """Estimate generation costs (without requiring API key)."""
         specs = self.calculate_tile_specs()
-        return self.gemini.estimate_cost(
-            num_tiles=len(specs),
-            num_landmarks=0,  # Landmarks calculated separately
-        )
+        num_tiles = len(specs)
+
+        # Approximate costs (same as GeminiService)
+        cost_per_image = 0.13  # USD
+
+        tile_cost = num_tiles * cost_per_image
+        # Estimate seam repairs at ~20% of tiles
+        seam_cost = int(num_tiles * 0.2) * cost_per_image
+
+        return {
+            "tile_cost": tile_cost,
+            "landmark_cost": 0,  # Landmarks calculated separately
+            "seam_cost": seam_cost,
+            "total_cost": tile_cost + seam_cost,
+        }
 
     def generate_single_test_tile(
         self,

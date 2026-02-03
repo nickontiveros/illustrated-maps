@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .config import get_config
-from .models.project import BoundingBox, Project
+from .models.project import BoundingBox, DetailLevel, Project, get_recommended_detail_level
 
 
 def timestamped_filename(base_name: str, extension: str = "png") -> str:
@@ -149,6 +149,10 @@ def info(project_path: str):
 
     project = Project.from_yaml(project_file)
 
+    # Calculate region area and recommended detail level
+    area_km2 = project.region.calculate_area_km2()
+    recommended_detail = project.region.get_recommended_detail_level()
+
     table = Table(title=f"Project: {project.name}")
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
@@ -157,6 +161,7 @@ def info(project_path: str):
     table.add_row("Region South", f"{project.region.south:.6f}")
     table.add_row("Region East", f"{project.region.east:.6f}")
     table.add_row("Region West", f"{project.region.west:.6f}")
+    table.add_row("Region Area", f"{area_km2:,.0f} km²")
     table.add_row("Output Width", f"{project.output.width} px")
     table.add_row("Output Height", f"{project.output.height} px")
     table.add_row("Output DPI", str(project.output.dpi))
@@ -167,6 +172,23 @@ def info(project_path: str):
     table.add_row("Tile Grid", f"{cols} x {rows} = {cols * rows} tiles")
 
     console.print(table)
+
+    # Show detail level recommendation with warning for large regions
+    console.print(f"\n[bold]Recommended Detail Level:[/bold] {recommended_detail.value}")
+    if recommended_detail == DetailLevel.COUNTRY:
+        console.print("[yellow]Warning:[/yellow] Region is very large. Only motorways and major cities will be rendered.")
+        console.print("[dim]Consider using a smaller region for more detail.[/dim]")
+    elif recommended_detail == DetailLevel.REGIONAL:
+        console.print("[yellow]Note:[/yellow] Region is large. Primary roads and named landmarks will be rendered.")
+    elif recommended_detail == DetailLevel.SIMPLIFIED:
+        console.print("[dim]Major roads and notable buildings will be rendered.[/dim]")
+    else:
+        console.print("[dim]Full detail - all roads and buildings will be rendered.[/dim]")
+
+    # Show per-tile OSM info for large regions
+    if area_km2 > 10_000:
+        console.print(f"\n[bold]Per-tile OSM fetching:[/bold] enabled (region > 10,000 km²)")
+        console.print("[dim]OSM data will be fetched per-tile to avoid query size limits.[/dim]")
 
     # Estimate costs
     from .services.gemini_service import GeminiService
@@ -476,12 +498,17 @@ def test_tile(project_path: str, col: int, row: int, save_reference: bool):
 @click.option("--perspective/--no-perspective", default=True, help="Apply perspective to final")
 @click.option("--skip-existing", is_flag=True, help="Skip tiles that are already cached")
 @click.option("--dry-run", is_flag=True, help="Show what would be generated without calling Gemini")
+@click.option("--detail-level", "-d",
+              type=click.Choice(["full", "simplified", "regional", "country", "auto"]),
+              default="auto",
+              help="OSM detail level (auto selects based on region size)")
 def generate_tiles(
     project_path: str,
     output: Optional[str],
     perspective: bool,
     skip_existing: bool,
     dry_run: bool,
+    detail_level: str,
 ):
     """Generate all illustrated map tiles using Gemini.
 
@@ -490,6 +517,13 @@ def generate_tiles(
     2. Creating reference images (satellite + OSM) for each tile
     3. Sending each tile to Gemini for illustration
     4. Blending all tiles into the final image
+
+    Detail levels:
+    - full: All features (for small areas < 100 km²)
+    - simplified: Major roads, notable buildings (100-1,000 km²)
+    - regional: Primary roads, landmarks only (1,000-50,000 km²)
+    - country: Motorways, major cities only (> 50,000 km²)
+    - auto: Automatically select based on region size (default)
 
     Requires GOOGLE_API_KEY environment variable to be set.
     """
@@ -505,9 +539,16 @@ def generate_tiles(
     from .services.generation_service import GenerationService
 
     config = get_config()
+
+    # Parse detail level
+    detail_level_enum = None
+    if detail_level != "auto":
+        detail_level_enum = DetailLevel(detail_level)
+
     gen_service = GenerationService(
         project=project,
         cache_dir=config.cache_dir / "generation",
+        detail_level=detail_level_enum,
     )
 
     # Show info
@@ -517,6 +558,10 @@ def generate_tiles(
 
     console.print(f"[bold]Project:[/bold] {project.name}")
     console.print(f"[bold]Output size:[/bold] {project.output.width} x {project.output.height} px")
+    console.print(f"[bold]Region area:[/bold] {gen_service.region_area_km2:,.0f} km²")
+    console.print(f"[bold]Detail level:[/bold] {gen_service.detail_level.value}")
+    if gen_service.uses_per_tile_osm:
+        console.print(f"[bold]Per-tile OSM:[/bold] [yellow]enabled[/yellow] (region > 10,000 km²)")
     console.print(f"[bold]Tile grid:[/bold] {cols} x {rows} = {len(specs)} tiles")
     console.print(f"[bold]Tile size:[/bold] {project.tiles.size}px with {project.tiles.overlap}px overlap")
     console.print(f"[bold]Estimated cost:[/bold] ${cost['total_cost']:.2f}")

@@ -32,7 +32,7 @@ landmarks:
     latitude: 40.7484
     longitude: -73.9857
     photo: "landmarks/Empire_State_Building.jpg"
-    logo: "logos/empire_state.png"
+    logo: "logos/empire_state.jpeg"
     scale: 2.5
     z_index: 10
 
@@ -40,7 +40,7 @@ landmarks:
     latitude: 40.7516
     longitude: -73.9755
     photo: "landmarks/Chrysler_Building.jpg"
-    logo: "logos/chrysler.png"
+    logo: "logos/chrysler.avif"
     scale: 2.2
     z_index: 9
 
@@ -48,6 +48,6 @@ landmarks:
     latitude: 40.7127
     longitude: -74.0134
     photo: "landmarks/One_World_Trade_Center_Building.jpg"
-    logo: "logos/wtc.png"
+    logo: "logos/wtc.jpg"
     scale: 2.8
     z_index: 10

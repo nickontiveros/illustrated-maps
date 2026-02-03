@@ -94,13 +94,21 @@ class OSMService:
 
         Args:
             bbox: Bounding box defining the region
-            detail_level: "full" (all data), "simplified" (major features only)
+            detail_level: Level of detail - "full", "simplified", "regional", or "country"
+                - full: All features (for areas < 100 km²)
+                - simplified: Major roads, notable buildings (100-1,000 km²)
+                - regional: Primary roads, landmarks only (1,000-50,000 km²)
+                - country: Motorways, major cities only (> 50,000 km²)
 
         Returns:
             OSMData containing extracted layers
         """
         if detail_level == "simplified":
             return self.fetch_simplified_region_data(bbox)
+        elif detail_level == "regional":
+            return self.fetch_regional_region_data(bbox)
+        elif detail_level == "country":
+            return self.fetch_country_region_data(bbox)
 
         data = OSMData()
 
@@ -137,6 +145,60 @@ class OSMService:
         data.water = self.extract_water(bbox)
         data.parks = self.extract_parks(bbox)
         # Skip railways and detailed terrain for simplified mode
+
+        return data
+
+    def fetch_regional_region_data(self, bbox: BoundingBox) -> OSMData:
+        """
+        Fetch regional OSM data - primary roads and landmarks only.
+
+        For medium-large regions (1,000-50,000 km²).
+
+        Only includes:
+        - Primary roads (motorways, trunks, primary)
+        - Named landmarks only (famous buildings, monuments)
+        - Major water bodies
+        - Major parks
+
+        Args:
+            bbox: Bounding box defining the region
+
+        Returns:
+            OSMData with regional layers
+        """
+        data = OSMData()
+
+        data.roads = self.extract_primary_roads(bbox)
+        data.buildings = self.extract_landmark_buildings(bbox)
+        data.water = self.extract_major_water(bbox)
+        data.parks = self.extract_major_parks(bbox)
+
+        return data
+
+    def fetch_country_region_data(self, bbox: BoundingBox) -> OSMData:
+        """
+        Fetch country-level OSM data - motorways and major cities only.
+
+        For very large regions (> 50,000 km²).
+
+        Only includes:
+        - Motorways only
+        - Capital/major cities (as points or simplified polygons)
+        - Coastlines and major rivers
+        - No parks (too detailed for country scale)
+
+        Args:
+            bbox: Bounding box defining the region
+
+        Returns:
+            OSMData with country-level layers
+        """
+        data = OSMData()
+
+        data.roads = self.extract_motorways_only(bbox)
+        data.buildings = self.extract_major_cities(bbox)
+        data.water = self.extract_coastline_and_major_rivers(bbox)
+        # No parks at country level
 
         return data
 
@@ -215,6 +277,76 @@ class OSMService:
 
         except Exception as e:
             print(f"Warning: Could not extract major roads: {e}")
+            return None
+
+    def extract_primary_roads(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract only primary roads (motorways, trunks, primary).
+
+        For regional-scale maps.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with primary road geometries
+        """
+        try:
+            primary_highway_types = [
+                "motorway",
+                "motorway_link",
+                "trunk",
+                "trunk_link",
+                "primary",
+                "primary_link",
+            ]
+
+            custom_filter = f'["highway"~"{'|'.join(primary_highway_types)}"]'
+
+            G = ox.graph_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                network_type="drive",
+                simplify=True,
+                custom_filter=custom_filter,
+            )
+
+            edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
+            edges["road_class"] = edges["highway"].apply(self._classify_road)
+
+            return edges
+
+        except Exception as e:
+            print(f"Warning: Could not extract primary roads: {e}")
+            return None
+
+    def extract_motorways_only(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract only motorways for country-scale maps.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with motorway geometries
+        """
+        try:
+            motorway_types = ["motorway", "motorway_link"]
+            custom_filter = f'["highway"~"{'|'.join(motorway_types)}"]'
+
+            G = ox.graph_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                network_type="drive",
+                simplify=True,
+                custom_filter=custom_filter,
+            )
+
+            edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
+            edges["road_class"] = "major"
+
+            return edges
+
+        except Exception as e:
+            print(f"Warning: Could not extract motorways: {e}")
             return None
 
     def _classify_road(self, highway_type) -> str:
@@ -343,6 +475,94 @@ class OSMService:
             print(f"Warning: Could not extract notable buildings: {e}")
             return None
 
+    def extract_landmark_buildings(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract only famous landmark buildings for regional-scale maps.
+
+        Only includes buildings with tourism, historic, or famous names.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with landmark building polygons
+        """
+        try:
+            # Tags that indicate a landmark
+            landmark_tags = {
+                "tourism": ["attraction", "museum", "monument", "artwork"],
+                "historic": ["monument", "memorial", "castle", "ruins", "fort"],
+                "building": ["cathedral", "church", "mosque", "temple", "stadium"],
+            }
+
+            landmarks = ox.features_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                tags=landmark_tags,
+            )
+
+            # Filter to polygons and points
+            landmarks = landmarks[
+                landmarks.geometry.type.isin(["Polygon", "MultiPolygon", "Point"])
+            ]
+
+            if len(landmarks) > 0 and "name" in landmarks.columns:
+                # Prioritize named landmarks
+                landmarks = landmarks[landmarks["name"].notna()]
+                landmarks["display_name"] = landmarks["name"]
+
+            print(f"Found {len(landmarks)} landmark buildings")
+            return landmarks
+
+        except Exception as e:
+            print(f"Warning: Could not extract landmark buildings: {e}")
+            return None
+
+    def extract_major_cities(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract major cities/towns for country-scale maps.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with city points
+        """
+        try:
+            city_tags = {
+                "place": ["city", "town"],
+            }
+
+            cities = ox.features_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                tags=city_tags,
+            )
+
+            if len(cities) > 0:
+                # Filter to only named places
+                if "name" in cities.columns:
+                    cities = cities[cities["name"].notna()].copy()
+                    cities["display_name"] = cities["name"]
+
+                # Get population if available for filtering
+                if "population" in cities.columns:
+                    # Convert to numeric, drop non-numeric
+                    cities["population"] = gpd.pd.to_numeric(
+                        cities["population"], errors="coerce"
+                    )
+                    # Keep larger cities (> 50,000) or all if no population data
+                    has_pop = cities["population"].notna()
+                    if has_pop.any():
+                        cities = cities[
+                            ~has_pop | (cities["population"] > 50000)
+                        ]
+
+            print(f"Found {len(cities)} major cities")
+            return cities
+
+        except Exception as e:
+            print(f"Warning: Could not extract major cities: {e}")
+            return None
+
     def extract_water(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
         """
         Extract water bodies and waterways from OSM.
@@ -377,6 +597,79 @@ class OSMService:
             print(f"Warning: Could not extract water: {e}")
             return None
 
+    def extract_major_water(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract only major water bodies for regional-scale maps.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with major water features
+        """
+        try:
+            water_tags = {
+                "natural": ["water", "bay", "strait"],
+                "waterway": ["river"],  # Only rivers, not streams/canals
+            }
+
+            water = ox.features_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                tags=water_tags,
+            )
+
+            water["water_type"] = "water"
+            if "waterway" in water.columns:
+                water.loc[water["waterway"].notna(), "water_type"] = "waterway"
+
+            return water
+
+        except Exception as e:
+            print(f"Warning: Could not extract major water: {e}")
+            return None
+
+    def extract_coastline_and_major_rivers(
+        self, bbox: BoundingBox
+    ) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract coastlines and major rivers for country-scale maps.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with coastline and major river features
+        """
+        try:
+            water_tags = {
+                "natural": ["coastline", "water", "bay"],
+                "waterway": ["river"],
+            }
+
+            water = ox.features_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                tags=water_tags,
+            )
+
+            # Filter to only named rivers (major ones have names)
+            if "waterway" in water.columns and "name" in water.columns:
+                is_river = water["waterway"] == "river"
+                has_name = water["name"].notna()
+                # Keep all non-rivers OR rivers with names
+                water = water[~is_river | has_name]
+
+            water["water_type"] = "water"
+            if "waterway" in water.columns:
+                water.loc[water["waterway"].notna(), "water_type"] = "river"
+            if "natural" in water.columns:
+                water.loc[water["natural"] == "coastline", "water_type"] = "coastline"
+
+            return water
+
+        except Exception as e:
+            print(f"Warning: Could not extract coastline and rivers: {e}")
+            return None
+
     def extract_parks(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
         """
         Extract parks and green spaces from OSM.
@@ -405,6 +698,41 @@ class OSMService:
 
         except Exception as e:
             print(f"Warning: Could not extract parks: {e}")
+            return None
+
+    def extract_major_parks(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract only major parks (national parks, nature reserves) for regional maps.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with major park polygons
+        """
+        try:
+            park_tags = {
+                "leisure": ["nature_reserve"],
+                "boundary": ["national_park", "protected_area"],
+            }
+
+            parks = ox.features_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                tags=park_tags,
+            )
+
+            # Filter to polygons
+            parks = parks[parks.geometry.type.isin(["Polygon", "MultiPolygon"])]
+
+            # Filter to named parks (major ones have names)
+            if "name" in parks.columns:
+                parks = parks[parks["name"].notna()]
+
+            print(f"Found {len(parks)} major parks")
+            return parks
+
+        except Exception as e:
+            print(f"Warning: Could not extract major parks: {e}")
             return None
 
     def extract_terrain_types(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:

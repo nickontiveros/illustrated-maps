@@ -1,5 +1,7 @@
 """Project configuration models."""
 
+import math
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -7,6 +9,44 @@ import yaml
 from pydantic import BaseModel, Field
 
 from .landmark import Landmark
+
+
+class DetailLevel(str, Enum):
+    """Level of detail for OSM data extraction based on region size."""
+
+    FULL = "full"  # All features (< 100 km²)
+    SIMPLIFIED = "simplified"  # Major roads, notable buildings (100-1,000 km²)
+    REGIONAL = "regional"  # Primary roads, landmarks only (1,000-50,000 km²)
+    COUNTRY = "country"  # Motorways, major cities only (> 50,000 km²)
+
+
+# Area thresholds for automatic detail level selection (in km²)
+DETAIL_LEVEL_THRESHOLDS = {
+    DetailLevel.FULL: 100,
+    DetailLevel.SIMPLIFIED: 1_000,
+    DetailLevel.REGIONAL: 50_000,
+    # COUNTRY is for anything larger
+}
+
+
+def get_recommended_detail_level(area_km2: float) -> DetailLevel:
+    """
+    Get the recommended detail level for a given area.
+
+    Args:
+        area_km2: Area in square kilometers
+
+    Returns:
+        Recommended DetailLevel
+    """
+    if area_km2 < DETAIL_LEVEL_THRESHOLDS[DetailLevel.FULL]:
+        return DetailLevel.FULL
+    elif area_km2 < DETAIL_LEVEL_THRESHOLDS[DetailLevel.SIMPLIFIED]:
+        return DetailLevel.SIMPLIFIED
+    elif area_km2 < DETAIL_LEVEL_THRESHOLDS[DetailLevel.REGIONAL]:
+        return DetailLevel.REGIONAL
+    else:
+        return DetailLevel.COUNTRY
 
 
 class BoundingBox(BaseModel):
@@ -31,6 +71,45 @@ class BoundingBox(BaseModel):
     def height_degrees(self) -> float:
         """Height in degrees latitude."""
         return abs(self.north - self.south)
+
+    def calculate_area_km2(self) -> float:
+        """
+        Calculate the area of the bounding box in square kilometers.
+
+        Uses the Haversine-based formula for calculating the area of a
+        geographic rectangle on Earth's surface.
+
+        Returns:
+            Area in square kilometers
+        """
+        # Earth's radius in km
+        R = 6371.0
+
+        # Convert to radians
+        lat1 = math.radians(self.south)
+        lat2 = math.radians(self.north)
+        lon1 = math.radians(self.west)
+        lon2 = math.radians(self.east)
+
+        # Handle longitude wrap-around
+        delta_lon = lon2 - lon1
+        if delta_lon < 0:
+            delta_lon += 2 * math.pi
+
+        # Calculate area using spherical geometry
+        # Area = R² × |sin(lat2) - sin(lat1)| × |lon2 - lon1|
+        area = (R**2) * abs(math.sin(lat2) - math.sin(lat1)) * abs(delta_lon)
+
+        return area
+
+    def get_recommended_detail_level(self) -> DetailLevel:
+        """
+        Get the recommended detail level for this bounding box.
+
+        Returns:
+            Recommended DetailLevel based on area
+        """
+        return get_recommended_detail_level(self.calculate_area_km2())
 
     def to_tuple(self) -> tuple[float, float, float, float]:
         """Return as (north, south, east, west) tuple for OSMnx."""

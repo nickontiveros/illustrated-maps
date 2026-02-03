@@ -1,0 +1,21 @@
+name: Great Britain
+region:
+  north: 58.67
+  south: 49.96
+  east: 1.77
+  west: -8.18
+output:
+  width: 7016
+  height: 9933
+  dpi: 300
+style:
+  perspective_angle: 35.264
+  prompt: Transform this map into a vibrant illustrated theme park map style, similar
+    to Disneyland park maps. Hand-painted illustration aesthetic with warm, saturated
+    colors. Isometric aerial view perspective. Maintain exact layout of roads, buildings,
+    and features. Clean edges suitable for tiling.
+  color_palette: null
+tiles:
+  size: 2048
+  overlap: 256
+landmarks: []
