@@ -28,6 +28,25 @@ def timestamped_filename(base_name: str, extension: str = "png") -> str:
     return f"{base_name}_{timestamp}.{extension}"
 
 
+def get_project_cache_dir(config, project: Project) -> Path:
+    """Get project-specific cache directory.
+
+    Creates a cache subdirectory based on the project name to keep
+    cached data (tiles, OSM, satellite) separate between projects.
+
+    Args:
+        config: Application config with base cache_dir
+        project: Project to get cache dir for
+
+    Returns:
+        Path like ~/.cache/mapgen/projects/<project_name>/
+    """
+    import re
+    # Sanitize project name for filesystem
+    safe_name = re.sub(r'[^\w\-]', '_', project.name.lower())
+    return config.cache_dir / "projects" / safe_name
+
+
 console = Console()
 
 
@@ -282,7 +301,8 @@ def _fetch_osm_data(project: Project, detail_level: str = "full"):
     from .services.osm_service import OSMService
 
     config = get_config()
-    osm_service = OSMService(cache_dir=str(config.cache_dir / "osm"))
+    project_cache = get_project_cache_dir(config, project)
+    osm_service = OSMService(cache_dir=str(project_cache / "osm"))
     return osm_service.fetch_region_data(project.region, detail_level=detail_level)
 
 
@@ -291,7 +311,8 @@ def _fetch_elevation_data(project: Project):
     from .services.terrain_service import TerrainService
 
     config = get_config()
-    terrain_service = TerrainService(cache_dir=str(config.cache_dir / "dem"))
+    project_cache = get_project_cache_dir(config, project)
+    terrain_service = TerrainService(cache_dir=str(project_cache / "dem"))
 
     try:
         return terrain_service.fetch_elevation_data(project.region)
@@ -461,9 +482,10 @@ def test_tile(project_path: str, col: int, row: int, save_reference: bool):
     from .services.generation_service import GenerationService
 
     config = get_config()
+    project_cache = get_project_cache_dir(config, project)
     gen_service = GenerationService(
         project=project,
-        cache_dir=config.cache_dir / "generation",
+        cache_dir=project_cache / "generation",
     )
 
     # Show grid info
@@ -579,6 +601,7 @@ def generate_tiles(
     from .services.generation_service import GenerationService
 
     config = get_config()
+    project_cache = get_project_cache_dir(config, project)
 
     # Parse detail level
     detail_level_enum = None
@@ -587,7 +610,7 @@ def generate_tiles(
 
     gen_service = GenerationService(
         project=project,
-        cache_dir=config.cache_dir / "generation",
+        cache_dir=project_cache / "generation",
         detail_level=detail_level_enum,
     )
 
@@ -741,7 +764,8 @@ def save_tiles(project_path: str):
     project.ensure_directories()
 
     config = get_config()
-    cache_dir = config.cache_dir / "generation"
+    project_cache = get_project_cache_dir(config, project)
+    cache_dir = project_cache / "generation"
 
     # Create tiles directories in project
     tiles_dir = project.output_dir / "tiles"
@@ -779,7 +803,8 @@ def _fetch_satellite_imagery(project: Project, output_size: tuple[int, int]):
     from .services.satellite_service import SatelliteService
 
     config = get_config()
-    satellite_service = SatelliteService(cache_dir=str(config.cache_dir / "satellite"))
+    project_cache = get_project_cache_dir(config, project)
+    satellite_service = SatelliteService(cache_dir=str(project_cache / "satellite"))
 
     return satellite_service.fetch_satellite_imagery(
         bbox=project.region,
@@ -792,7 +817,8 @@ def _fetch_simplified_osm_data(project: Project):
     from .services.osm_service import OSMService
 
     config = get_config()
-    osm_service = OSMService(cache_dir=str(config.cache_dir / "osm"))
+    project_cache = get_project_cache_dir(config, project)
+    osm_service = OSMService(cache_dir=str(project_cache / "osm"))
     return osm_service.fetch_region_data(project.region, detail_level="simplified")
 
 
@@ -932,6 +958,7 @@ def repair_seam(
 
     project = Project.from_yaml(project_file)
     config = get_config()
+    project_cache = get_project_cache_dir(config, project)
 
     # Calculate grid dimensions
     cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
@@ -980,7 +1007,7 @@ def repair_seam(
         console.print(f"[dim]Using: {input_path}[/dim]")
 
     assembled = Image.open(input_path).convert("RGBA")
-    cache_dir = config.cache_dir / "generation"
+    cache_dir = project_cache / "generation"
 
     # Repair seams
     with Progress(
@@ -1046,6 +1073,7 @@ def regenerate_tile(
 
     project = Project.from_yaml(project_file)
     config = get_config()
+    project_cache = get_project_cache_dir(config, project)
 
     # Parse tile coordinates
     tiles_to_regen = []
@@ -1063,7 +1091,7 @@ def regenerate_tile(
     # Create generation service
     gen_service = GenerationService(
         project=project,
-        cache_dir=config.cache_dir / "generation",
+        cache_dir=project_cache / "generation",
     )
 
     # Get all tile specs
@@ -1087,7 +1115,7 @@ def regenerate_tile(
 
     # Delete cached tiles if --no-cache
     if no_cache:
-        cache_dir = config.cache_dir / "generation" / "generated"
+        cache_dir = project_cache / "generation" / "generated"
         for spec in specs_to_regen:
             cache_file = cache_dir / f"tile_{spec.col}_{spec.row}.png"
             if cache_file.exists():
@@ -1147,11 +1175,12 @@ def assemble(
 
     project = Project.from_yaml(project_file)
     config = get_config()
+    project_cache = get_project_cache_dir(config, project)
 
     # Create services
     gen_service = GenerationService(
         project=project,
-        cache_dir=config.cache_dir / "generation",
+        cache_dir=project_cache / "generation",
     )
 
     # Get tile specs
@@ -1162,7 +1191,7 @@ def assemble(
     console.print(f"[bold]Tile grid:[/bold] {cols} x {rows} = {len(specs)} tiles")
 
     # Load cached tiles
-    cache_dir = config.cache_dir / "generation" / "generated"
+    cache_dir = project_cache / "generation" / "generated"
     loaded = []
     missing = []
 
@@ -1657,11 +1686,12 @@ def generate_full(
     project = Project.from_yaml(project_file)
     project.ensure_directories()
     config = get_config()
+    project_cache = get_project_cache_dir(config, project)
 
     # Initialize services
     gen_service = GenerationService(
         project=project,
-        cache_dir=config.cache_dir / "generation",
+        cache_dir=project_cache / "generation",
     )
     landmark_service = LandmarkService(project)
 
@@ -1729,7 +1759,7 @@ def generate_full(
         # Load cached tiles for assembly
         from .services.generation_service import TileResult
 
-        cache_dir = config.cache_dir / "generation" / "generated"
+        cache_dir = project_cache / "generation" / "generated"
         results = []
         for spec in specs:
             tile_path = cache_dir / f"tile_{spec.col}_{spec.row}.png"
