@@ -122,7 +122,7 @@ class OSMService:
 
         return data
 
-    def fetch_simplified_region_data(self, bbox: BoundingBox) -> OSMData:
+    def fetch_simplified_region_data(self, bbox: BoundingBox, verbose: bool = True) -> OSMData:
         """
         Fetch simplified OSM data - major features only for illustrated maps.
 
@@ -134,16 +134,46 @@ class OSMService:
 
         Args:
             bbox: Bounding box defining the region
+            verbose: Print progress messages
 
         Returns:
             OSMData with simplified layers
         """
+        import sys
         data = OSMData()
 
+        if verbose:
+            print("  [OSM] Fetching major roads...", end=" ", flush=True)
+            sys.stdout.flush()
         data.roads = self.extract_major_roads(bbox)
+        if verbose:
+            road_count = len(data.roads) if data.roads is not None else 0
+            print(f"({road_count} features)")
+
+        if verbose:
+            print("  [OSM] Fetching notable buildings...", end=" ", flush=True)
+            sys.stdout.flush()
         data.buildings = self.extract_notable_buildings(bbox)
+        if verbose:
+            building_count = len(data.buildings) if data.buildings is not None else 0
+            print(f"({building_count} features)")
+
+        if verbose:
+            print("  [OSM] Fetching water...", end=" ", flush=True)
+            sys.stdout.flush()
         data.water = self.extract_water(bbox)
+        if verbose:
+            water_count = len(data.water) if data.water is not None else 0
+            print(f"({water_count} features)")
+
+        if verbose:
+            print("  [OSM] Fetching parks...", end=" ", flush=True)
+            sys.stdout.flush()
         data.parks = self.extract_parks(bbox)
+        if verbose:
+            park_count = len(data.parks) if data.parks is not None else 0
+            print(f"({park_count} features)")
+
         # Skip railways and detailed terrain for simplified mode
 
         return data

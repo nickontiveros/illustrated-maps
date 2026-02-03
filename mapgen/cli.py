@@ -453,35 +453,48 @@ def test_tile(project_path: str, col: int, row: int, save_reference: bool):
     cost = gen_service.estimate_cost()
     console.print(f"[dim]Single tile cost: ~$0.13 | Full map: ~${cost['total_cost']:.2f}[/dim]")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+
+    specs = gen_service.calculate_tile_specs()
+    spec = next(s for s in specs if s.col == col and s.row == row)
+
+    def make_status_panel(status: str) -> Panel:
+        content = Text()
+        content.append(f"Tile ({col}, {row}) - {spec.position_desc}\n", style="cyan")
+        content.append(f"Status: ", style="dim")
+        content.append(status, style="yellow")
+        return Panel(content, title="[bold]Test Tile Generation[/bold]", border_style="blue")
+
+    with Live(console=console, refresh_per_second=4) as live:
+        def progress_callback(status: str):
+            live.update(make_status_panel(status))
+
         # Generate reference
-        task = progress.add_task("Generating reference image...", total=None)
+        progress_callback("Generating reference image...")
+        reference = gen_service.generate_tile_reference(spec, progress_callback=progress_callback)
 
-        specs = gen_service.calculate_tile_specs()
-        spec = next(s for s in specs if s.col == col and s.row == row)
+    console.print("[green]Reference generated[/green]")
 
-        reference = gen_service.generate_tile_reference(spec)
-        progress.update(task, completed=True, description="[green]Reference generated")
+    if save_reference:
+        ref_path = project.output_dir / f"test_tile_{col}_{row}_reference.png"
+        reference.save(ref_path)
+        console.print(f"[dim]Saved reference:[/dim] {ref_path}")
 
-        if save_reference:
-            ref_path = project.output_dir / f"test_tile_{col}_{row}_reference.png"
-            reference.save(ref_path)
-            console.print(f"[dim]Saved reference:[/dim] {ref_path}")
+    # Generate with Gemini
+    with Live(console=console, refresh_per_second=4) as live:
+        def progress_callback(status: str):
+            live.update(make_status_panel(status))
 
-        # Generate with Gemini
-        task = progress.add_task("Calling Gemini (this may take 30-60 seconds)...", total=None)
+        progress_callback("Calling Gemini API...")
+        result = gen_service.generate_tile(spec, progress_callback=progress_callback)
 
-        result = gen_service.generate_tile(spec)
+    if result.error:
+        console.print(f"[red]Failed: {result.error}[/red]")
+        raise SystemExit(1)
 
-        if result.error:
-            progress.update(task, description=f"[red]Failed: {result.error}")
-            raise SystemExit(1)
-
-        progress.update(task, completed=True, description=f"[green]Generated in {result.generation_time:.1f}s")
+    console.print(f"[green]Generated in {result.generation_time:.1f}s[/green]")
 
     # Save result
     output_path = project.output_dir / timestamped_filename(f"test_tile_{col}_{row}")
