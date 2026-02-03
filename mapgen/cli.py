@@ -1766,5 +1766,141 @@ def generate_full(
     console.print(f"[dim]Size: {final_image.width} x {final_image.height} px[/dim]")
 
 
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.option("--input", "-i", "input_file", type=click.Path(exists=True),
+              help="Input perspective-transformed map image")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--convergence", type=float, default=0.7,
+              help="Perspective convergence factor (0.0-1.0)")
+@click.option("--vertical-scale", type=float, default=0.4,
+              help="Vertical compression at top (0.0-1.0)")
+@click.option("--horizon-margin", type=float, default=0.15,
+              help="Horizon band height as fraction of content height")
+@click.option("--fill-color", type=str, default="#808080",
+              help="Fill color for empty regions (hex, e.g., #808080)")
+@click.option("--dry-run", is_flag=True, help="Show info without generating")
+def outpaint(
+    project_path: str,
+    input_file: Optional[str],
+    output: Optional[str],
+    convergence: float,
+    vertical_scale: float,
+    horizon_margin: float,
+    fill_color: str,
+    dry_run: bool,
+):
+    """Outpaint empty regions in a perspective-transformed map.
+
+    After applying perspective transform, the map becomes trapezoidal with
+    empty regions (horizon band at top, triangles on sides).
+
+    This command uses a single-generation + upscale approach:
+    1. Fill empty regions with grey
+    2. Downscale image to fit Gemini limits
+    3. Single Gemini call to complete the image
+    4. Upscale with Real-ESRGAN
+    5. Merge with original high-res content
+
+    Example:
+        mapgen outpaint projects/nyc/ -i output/final_with_perspective.png
+    """
+    from .services.outpainting_service import OutpaintingService
+
+    console = Console()
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+    console.print(f"[bold]Project:[/bold] {project.name}")
+
+    # Find input image
+    if input_file:
+        image_path = Path(input_file)
+    else:
+        # Look for perspective-transformed image in output
+        output_dir = project.output_dir
+        candidates = list(output_dir.glob("*perspective*.png"))
+        candidates.extend(output_dir.glob("*final*.png"))
+        if not candidates:
+            console.print("[red]No input image specified and none found in output/[/red]")
+            console.print("[dim]Use --input to specify the perspective-transformed map[/dim]")
+            raise SystemExit(1)
+        # Use most recent
+        image_path = max(candidates, key=lambda p: p.stat().st_mtime)
+        console.print(f"[dim]Using: {image_path}[/dim]")
+
+    # Load image
+    image = Image.open(image_path).convert("RGBA")
+    console.print(f"[dim]Image size: {image.width} x {image.height} px[/dim]")
+
+    # Parse fill color
+    try:
+        fill_color_rgb = tuple(int(fill_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        console.print(f"[red]Invalid fill color: {fill_color}[/red]")
+        raise SystemExit(1)
+
+    # Initialize service
+    outpainting = OutpaintingService(
+        convergence=convergence,
+        vertical_scale=vertical_scale,
+        horizon_margin=horizon_margin,
+        fill_color=fill_color_rgb,
+    )
+
+    # Calculate and display info
+    scale_factor = outpainting.calculate_scale_factor(image.size)
+    downscaled_size = (
+        int(image.width * scale_factor),
+        int(image.height * scale_factor),
+    )
+
+    console.print(f"\n[bold]Outpainting Strategy:[/bold]")
+    console.print(f"  Fill color: {fill_color}")
+    console.print(f"  Downscale: {image.width}x{image.height} → {downscaled_size[0]}x{downscaled_size[1]} (factor: {scale_factor:.3f})")
+    console.print(f"  Upscale factor: {1/scale_factor:.1f}x with Real-ESRGAN")
+
+    # Show cost estimate
+    cost = outpainting.estimate_cost()
+    console.print(f"\n[bold]Estimated cost:[/bold] ${cost['total_cost']:.2f}")
+    console.print(f"  Single Gemini generation: ${cost['gemini_cost']:.2f}")
+    console.print(f"  Real-ESRGAN upscale: ${cost['upscale_cost']:.2f} (local)")
+
+    if dry_run:
+        console.print("\n[yellow]Dry run - no images generated[/yellow]")
+        return
+
+    # Confirm
+    if not click.confirm("\nProceed with outpainting?"):
+        console.print("[yellow]Cancelled[/yellow]")
+        return
+
+    # Run outpainting with progress
+    console.print("\n[bold cyan]Outpainting...[/bold cyan]")
+
+    def progress_callback(message: str, progress: float):
+        console.print(f"  [dim]{message}[/dim]")
+
+    result = outpainting.outpaint_image(
+        image=image,
+        bbox=project.region,
+        progress_callback=progress_callback,
+    )
+
+    # Save result
+    if output:
+        output_path = Path(output)
+    else:
+        base_name = image_path.stem + "_outpainted"
+        output_path = project.output_dir / f"{base_name}.png"
+
+    result.save(output_path)
+    console.print(f"\n[green]Complete![/green]")
+    console.print(f"[bold]Output:[/bold] {output_path}")
+    console.print(f"[dim]Size: {result.width} x {result.height} px[/dim]")
+
+
 if __name__ == "__main__":
     main()

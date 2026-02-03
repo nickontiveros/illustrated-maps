@@ -12,6 +12,7 @@ from .psd_service import PSDService
 from .generation_service import GenerationService
 from .seam_repair_service import SeamRepairService
 from .landmark_service import LandmarkService
+from .outpainting_service import OutpaintingService
 
 __all__ = [
     "OSMService",
@@ -26,4 +27,5 @@ __all__ = [
     "GenerationService",
     "SeamRepairService",
     "LandmarkService",
+    "OutpaintingService",
 ]
