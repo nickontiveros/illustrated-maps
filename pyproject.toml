@@ -38,6 +38,18 @@ dev = [
     "black>=24.0.0",
     "ruff>=0.1.0",
 ]
+upscaling = [
+    "realesrgan>=0.3.0",
+    "basicsr>=1.4.0",
+]
+psd = [
+    "psd-tools>=1.9.0",
+]
+all = [
+    "realesrgan>=0.3.0",
+    "basicsr>=1.4.0",
+    "psd-tools>=1.9.0",
+]
 
 [project.scripts]
 mapgen = "mapgen.cli:main"

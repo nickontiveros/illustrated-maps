@@ -14,8 +14,12 @@ pillow>=10.0.0
 numpy>=1.26.0
 scipy>=1.12.0
 
-# AI generation
-google-generativeai>=0.8.0
+# AI generation (google-genai is the new SDK)
+google-genai>=1.0.0
+
+# Upscaling for outpainting (optional but recommended)
+realesrgan>=0.3.0
+basicsr>=1.4.0
 
 # PSD export
 pytoshop>=1.2.0
