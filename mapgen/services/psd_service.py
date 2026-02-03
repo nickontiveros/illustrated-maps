@@ -59,6 +59,7 @@ class PSDService:
         """Create PSD using pytoshop library."""
         import pytoshop
         from pytoshop import layers as psd_layers
+        from pytoshop.enums import Compression
 
         # Determine canvas size
         if canvas_size is None:
@@ -86,15 +87,22 @@ class PSDService:
             # Convert to numpy array
             arr = np.array(img)
 
-            # Create layer
-            # pytoshop expects channels as separate arrays
-            r = arr[:, :, 0]
-            g = arr[:, :, 1]
-            b = arr[:, :, 2]
-            a = arr[:, :, 3]
+            # Create ChannelImageData for each channel (using raw to avoid pytoshop RLE bug)
+            r = psd_layers.ChannelImageData(
+                image=arr[:, :, 0], compression=Compression.raw
+            )
+            g = psd_layers.ChannelImageData(
+                image=arr[:, :, 1], compression=Compression.raw
+            )
+            b = psd_layers.ChannelImageData(
+                image=arr[:, :, 2], compression=Compression.raw
+            )
+            a = psd_layers.ChannelImageData(
+                image=arr[:, :, 3], compression=Compression.raw
+            )
 
-            # Create layer with position
-            layer = psd_layers.Layer(
+            # Create layer with position using LayerRecord
+            layer = psd_layers.LayerRecord(
                 name=name,
                 top=pos[1],
                 left=pos[0],

@@ -1902,5 +1902,158 @@ def outpaint(
     console.print(f"[dim]Size: {result.width} x {result.height} px[/dim]")
 
 
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.option("--base-map", "-b", type=click.Path(exists=True), required=True,
+              help="Base map image (final composed map)")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--format", "export_format", type=click.Choice(["psd", "layers"]), default="psd",
+              help="Export format: psd (layered PSD) or layers (separate PNGs)")
+@click.option("--with-logos/--no-logos", default=True, help="Include logo labels")
+@click.option("--perspective/--no-perspective", default=True,
+              help="Use perspective-adjusted positions")
+@click.option("--convergence", default=0.7, help="Perspective convergence (0.0-1.0)")
+@click.option("--vertical-scale", default=0.4, help="Vertical scale at top (0.0-1.0)")
+@click.option("--horizon-margin", default=0.15, help="Horizon margin fraction")
+def export_psd(
+    project_path: str,
+    base_map: str,
+    output: Optional[str],
+    export_format: str,
+    with_logos: bool,
+    perspective: bool,
+    convergence: float,
+    vertical_scale: float,
+    horizon_margin: float,
+):
+    """Export map as layered PSD file for editing in Photoshop/GIMP.
+
+    Creates a PSD with separate layers for the base map and each landmark,
+    allowing for post-editing of individual elements.
+
+    Examples:
+        mapgen export-psd project/ --base-map output/final.png -o map.psd
+        mapgen export-psd project/ -b output/final.png --format layers -o layers/
+    """
+    from .services.composition_service import CompositionService
+    from .services.landmark_service import LandmarkService
+    from .services.psd_service import PSDService
+
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+
+    # Load services
+    landmark_service = LandmarkService(project)
+    landmarks = landmark_service.get_landmarks()
+
+    # Load base map
+    base_image = Image.open(base_map).convert("RGBA")
+    console.print(f"[bold]Project:[/bold] {project.name}")
+    console.print(f"[bold]Base map:[/bold] {base_map}")
+    console.print(f"[bold]Size:[/bold] {base_image.width} x {base_image.height}")
+    console.print(f"[bold]Landmarks:[/bold] {len(landmarks)}")
+    console.print(f"[bold]Format:[/bold] {export_format.upper()}")
+
+    # Create composition service
+    composition = CompositionService(
+        perspective_convergence=convergence,
+        perspective_vertical_scale=vertical_scale,
+        perspective_horizon_margin=horizon_margin,
+    )
+    base_map_size = (base_image.width, base_image.height)
+
+    # Load and place landmarks
+    placed_landmarks = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Loading landmarks...", total=len(landmarks))
+
+        for landmark in landmarks:
+            # Load illustrated image
+            illustration = landmark_service.load_illustrated(landmark)
+            if illustration is None:
+                console.print(f"[yellow]Skipping {landmark.name} - no illustration[/yellow]")
+                progress.advance(task)
+                continue
+
+            # Place landmark
+            placed = composition.place_landmark(
+                landmark=landmark,
+                illustration=illustration,
+                base_map_size=base_map_size,
+                bbox=project.region,
+                apply_perspective=perspective,
+                remove_background=True,
+            )
+
+            # Load and attach logo
+            if with_logos:
+                logo = landmark_service.load_logo(landmark)
+                if logo is not None:
+                    composition.place_logo(placed, logo, max_width=300)
+
+            placed_landmarks.append(placed)
+            progress.advance(task)
+
+    console.print(f"[dim]Found {len(placed_landmarks)} illustrated landmarks[/dim]")
+
+    if not placed_landmarks:
+        console.print("[yellow]No illustrated landmarks found.[/yellow]")
+        console.print("[dim]Run 'illustrate-landmarks' first, or export without landmarks.[/dim]")
+
+    # Avoid logo collisions
+    if placed_landmarks:
+        placed_landmarks = composition.avoid_collisions(placed_landmarks, base_map_size)
+
+    # Create layer stack
+    layers = composition.create_layer_stack(base_image, placed_landmarks)
+    console.print(f"[dim]Created {len(layers)} layers[/dim]")
+
+    # Determine output path
+    if output:
+        output_path = Path(output)
+    else:
+        if export_format == "psd":
+            output_path = project.output_dir / f"{project.name.replace(' ', '_')}_layered.psd"
+        else:
+            output_path = project.output_dir / "layers"
+
+    # Export
+    psd_service = PSDService()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        if export_format == "psd":
+            task = progress.add_task("Exporting PSD...", total=None)
+            psd_service.create_layered_psd(layers, output_path, canvas_size=base_map_size)
+            progress.update(task, completed=True, description="[green]PSD exported")
+            console.print(f"\n[green]Success![/green] Layered PSD saved to: {output_path}")
+        else:
+            task = progress.add_task("Exporting layers...", total=None)
+            exported = psd_service.export_layers_separately(layers, output_path, canvas_size=base_map_size)
+            progress.update(task, completed=True, description="[green]Layers exported")
+            console.print(f"\n[green]Success![/green] {len(exported)} layers saved to: {output_path}")
+
+            # Also create manifest
+            manifest_path = output_path / "layers.json"
+            psd_service.create_layer_manifest(layers, manifest_path)
+            console.print(f"[dim]Layer manifest: {manifest_path}[/dim]")
+
+    # Show layer summary
+    console.print("\n[bold]Layer structure:[/bold]")
+    for name in layers.keys():
+        console.print(f"  • {name}")
+
+
 if __name__ == "__main__":
     main()
