@@ -592,41 +592,51 @@ def generate_tiles(
         console.print("[yellow]Cancelled[/yellow]")
         return
 
-    # Pre-fetch OSM data
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Fetching OSM data for region...", total=None)
-        gen_service.fetch_osm_data()
-        progress.update(task, completed=True, description="[green]OSM data fetched")
+    # Pre-fetch OSM data (only for small regions; large regions fetch per-tile)
+    if not gen_service.uses_per_tile_osm:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Fetching OSM data for region...", total=None)
+            gen_service.fetch_osm_data()
+            progress.update(task, completed=True, description="[green]OSM data fetched")
+    else:
+        console.print("[dim]OSM data will be fetched per-tile (large region mode)[/dim]")
 
     # Generate tiles with progress
     from rich.progress import BarColumn, TaskProgressColumn, TimeRemainingColumn
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
 
     console.print("\n[bold]Generating tiles...[/bold]")
 
     results = []
     failed = []
+    current_status = ["Initializing..."]
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Generating tiles", total=len(specs))
+    def make_status_panel(tile_num: int, total: int, spec, status: str) -> Panel:
+        """Create a status panel showing current tile progress."""
+        content = Text()
+        content.append(f"Tile {tile_num}/{total}: ", style="bold")
+        content.append(f"({spec.col}, {spec.row}) - {spec.position_desc}\n", style="cyan")
+        content.append(f"Status: ", style="dim")
+        content.append(status, style="yellow")
+        return Panel(content, title="[bold]Generating[/bold]", border_style="blue")
 
-        for spec in specs:
-            progress.update(
-                task,
-                description=f"Tile ({spec.col}, {spec.row}) - {spec.position_desc}",
-            )
+    with Live(console=console, refresh_per_second=4) as live:
+        for i, spec in enumerate(specs):
+            tile_num = i + 1
 
-            result = gen_service.generate_tile(spec)
+            # Create progress callback that updates the live display
+            def progress_callback(status: str, spec=spec, tile_num=tile_num):
+                live.update(make_status_panel(tile_num, len(specs), spec, status))
+
+            progress_callback("Starting...")
+
+            result = gen_service.generate_tile(spec, progress_callback=progress_callback)
             results.append(result)
 
             if result.error:
@@ -634,8 +644,6 @@ def generate_tiles(
                 console.print(f"  [red]Failed:[/red] ({spec.col}, {spec.row}) - {result.error}")
             else:
                 console.print(f"  [green]Done:[/green] ({spec.col}, {spec.row}) in {result.generation_time:.1f}s")
-
-            progress.advance(task)
 
     # Report results
     console.print(f"\n[bold]Generation complete:[/bold]")

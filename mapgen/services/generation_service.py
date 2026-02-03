@@ -284,7 +284,6 @@ class GenerationService:
         )
 
         if cache_key not in self._osm_tile_cache:
-            print(f"Fetching OSM data for tile bbox with detail level: {self._detail_level.value}")
             self._osm_tile_cache[cache_key] = self.osm.fetch_region_data(
                 tile_bbox,
                 detail_level=self._detail_level.value,
@@ -296,6 +295,7 @@ class GenerationService:
         self,
         spec: TileSpec,
         apply_perspective: bool = False,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Image.Image:
         """
         Generate reference image for a single tile.
@@ -303,6 +303,7 @@ class GenerationService:
         Args:
             spec: Tile specification
             apply_perspective: Whether to apply perspective transform
+            progress_callback: Optional callback for progress updates
 
         Returns:
             Composite reference image (satellite + OSM)
@@ -310,13 +311,22 @@ class GenerationService:
         tile_size = self.project.tiles.size
 
         # Fetch satellite imagery for tile
+        if progress_callback:
+            progress_callback("Fetching satellite imagery...")
         satellite_image = self.satellite.fetch_satellite_imagery(
             bbox=spec.bbox,
             output_size=(tile_size, tile_size),
         )
+        if progress_callback:
+            progress_callback("Satellite imagery fetched")
 
         # Get OSM data (cached, or per-tile for large regions)
+        if self._use_per_tile_osm:
+            if progress_callback:
+                progress_callback(f"Fetching OSM data ({self._detail_level.value} detail)...")
         osm_data = self.fetch_osm_data(tile_bbox=spec.bbox if self._use_per_tile_osm else None)
+        if self._use_per_tile_osm and progress_callback:
+            progress_callback("OSM data fetched")
 
         # Create perspective and render services
         perspective = PerspectiveService(
@@ -344,6 +354,7 @@ class GenerationService:
         spec: TileSpec,
         style_prompt: Optional[str] = None,
         max_retries: int = 3,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> TileResult:
         """
         Generate a single illustrated tile.
@@ -352,6 +363,7 @@ class GenerationService:
             spec: Tile specification
             style_prompt: Custom style prompt (uses project default if None)
             max_retries: Maximum retries on failure
+            progress_callback: Optional callback for progress updates
 
         Returns:
             TileResult with generated image
@@ -361,12 +373,14 @@ class GenerationService:
         # Check cache first
         cached = self._load_cached_tile(spec)
         if cached is not None:
+            if progress_callback:
+                progress_callback("Using cached tile")
             result.generated_image = cached
             return result
 
         # Generate reference image
         try:
-            result.reference_image = self.generate_tile_reference(spec)
+            result.reference_image = self.generate_tile_reference(spec, progress_callback=progress_callback)
         except Exception as e:
             result.error = f"Failed to generate reference: {e}"
             return result
@@ -383,6 +397,9 @@ class GenerationService:
 
         for attempt in range(max_retries):
             try:
+                if progress_callback:
+                    retry_msg = f" (retry {attempt + 1}/{max_retries})" if attempt > 0 else ""
+                    progress_callback(f"Calling Gemini API{retry_msg}...")
                 start_time = time.time()
 
                 gen_result = self.gemini.generate_base_tile(
@@ -397,12 +414,16 @@ class GenerationService:
 
                 # Cache the result
                 self._save_cached_tile(spec, gen_result.image)
+                if progress_callback:
+                    progress_callback(f"Generated in {result.generation_time:.1f}s")
 
                 return result
 
             except Exception as e:
                 last_error = str(e)
                 result.retries = attempt + 1
+                if progress_callback:
+                    progress_callback(f"Attempt {attempt + 1} failed: {last_error}")
                 if attempt < max_retries - 1:
                     time.sleep(2 ** attempt)  # Exponential backoff
 

@@ -166,12 +166,32 @@ class OSMService:
         Returns:
             OSMData with regional layers
         """
+        import sys
         data = OSMData()
 
+        print("  [OSM] Fetching primary roads...", end=" ", flush=True)
+        sys.stdout.flush()
         data.roads = self.extract_primary_roads(bbox)
+        road_count = len(data.roads) if data.roads is not None else 0
+        print(f"({road_count} features)")
+
+        print("  [OSM] Fetching landmark buildings...", end=" ", flush=True)
+        sys.stdout.flush()
         data.buildings = self.extract_landmark_buildings(bbox)
+        building_count = len(data.buildings) if data.buildings is not None else 0
+        print(f"({building_count} features)")
+
+        print("  [OSM] Fetching major water...", end=" ", flush=True)
+        sys.stdout.flush()
         data.water = self.extract_major_water(bbox)
+        water_count = len(data.water) if data.water is not None else 0
+        print(f"({water_count} features)")
+
+        print("  [OSM] Fetching major parks...", end=" ", flush=True)
+        sys.stdout.flush()
         data.parks = self.extract_major_parks(bbox)
+        park_count = len(data.parks) if data.parks is not None else 0
+        print(f"({park_count} features)")
 
         return data
 
@@ -193,11 +213,27 @@ class OSMService:
         Returns:
             OSMData with country-level layers
         """
+        import sys
         data = OSMData()
 
+        print("  [OSM] Fetching motorways...", end=" ", flush=True)
+        sys.stdout.flush()
         data.roads = self.extract_motorways_only(bbox)
+        road_count = len(data.roads) if data.roads is not None else 0
+        print(f"({road_count} features)")
+
+        print("  [OSM] Fetching major cities...", end=" ", flush=True)
+        sys.stdout.flush()
         data.buildings = self.extract_major_cities(bbox)
+        city_count = len(data.buildings) if data.buildings is not None else 0
+        print(f"({city_count} features)")
+
+        print("  [OSM] Fetching coastline and rivers...", end=" ", flush=True)
+        sys.stdout.flush()
         data.water = self.extract_coastline_and_major_rivers(bbox)
+        water_count = len(data.water) if data.water is not None else 0
+        print(f"({water_count} features)")
+
         # No parks at country level
 
         return data
