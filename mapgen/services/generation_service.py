@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+import numpy as np
 from PIL import Image
 
 from ..models.project import BoundingBox, DetailLevel, Project, get_recommended_detail_level
@@ -24,6 +25,21 @@ from .satellite_service import SatelliteService
 
 # Area threshold for per-tile OSM fetching (in km²)
 PER_TILE_OSM_THRESHOLD = 10_000
+
+# Water tile detection thresholds
+WATER_BLUE_HUE_RANGE = (180, 240)  # Hue range for ocean blue (in degrees)
+WATER_SATURATION_MIN = 30  # Minimum saturation for water detection
+WATER_UNIFORMITY_THRESHOLD = 0.85  # % of pixels that must be "water-like"
+WATER_VARIANCE_THRESHOLD = 500  # Max variance in pixel values for uniform tile
+
+# Prompt for water-only tiles
+WATER_TILE_PROMPT = (
+    "Generate stylized illustrated ocean water in a vibrant theme park map style. "
+    "Create gentle, hand-painted waves with warm blue-green tones. "
+    "The water should have subtle color variation and texture like a classic "
+    "Disneyland park map ocean - not flat or photorealistic. "
+    "Fill the entire tile with continuous water that will seamlessly tile with adjacent water areas."
+)
 
 
 @dataclass
@@ -291,6 +307,69 @@ class GenerationService:
 
         return self._osm_tile_cache[cache_key]
 
+    def _is_water_tile(self, image: Image.Image) -> bool:
+        """
+        Detect if an image is predominantly water (uniform blue).
+
+        Uses color analysis to detect ocean/water tiles:
+        - Checks if most pixels are in the blue hue range
+        - Verifies the image is relatively uniform (low variance)
+
+        Args:
+            image: PIL Image to analyze
+
+        Returns:
+            True if the image appears to be mostly water
+        """
+        # Convert to numpy array
+        img_array = np.array(image.convert("RGB"))
+
+        # Convert to HSV for better color analysis
+        # We'll do a simplified HSV conversion
+        r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
+
+        # Calculate value (max of RGB)
+        v = np.maximum(np.maximum(r, g), b)
+
+        # Calculate saturation
+        min_rgb = np.minimum(np.minimum(r, g), b)
+        delta = v - min_rgb
+        s = np.where(v > 0, (delta / v) * 100, 0)
+
+        # Calculate hue (simplified)
+        h = np.zeros_like(r, dtype=float)
+        mask = delta > 0
+
+        # Red is max
+        red_max = (v == r) & mask
+        h[red_max] = 60 * (((g[red_max] - b[red_max]) / delta[red_max]) % 6)
+
+        # Green is max
+        green_max = (v == g) & mask
+        h[green_max] = 60 * (((b[green_max] - r[green_max]) / delta[green_max]) + 2)
+
+        # Blue is max
+        blue_max = (v == b) & mask
+        h[blue_max] = 60 * (((r[blue_max] - g[blue_max]) / delta[blue_max]) + 4)
+
+        # Check how many pixels are "water-like" (blue hue with some saturation)
+        min_hue, max_hue = WATER_BLUE_HUE_RANGE
+        is_blue = (h >= min_hue) & (h <= max_hue)
+        has_saturation = s >= WATER_SATURATION_MIN
+        is_water_pixel = is_blue & has_saturation
+
+        water_ratio = np.mean(is_water_pixel)
+
+        # Also check overall variance - water tiles are very uniform
+        variance = np.var(img_array)
+
+        is_water = (
+            water_ratio >= WATER_UNIFORMITY_THRESHOLD
+            or (water_ratio >= 0.5 and variance < WATER_VARIANCE_THRESHOLD)
+        )
+
+        return is_water
+
     def generate_tile_reference(
         self,
         spec: TileSpec,
@@ -391,8 +470,14 @@ class GenerationService:
             ref_path.parent.mkdir(parents=True, exist_ok=True)
             result.reference_image.save(ref_path)
 
-        # Call Gemini with retries
-        prompt = style_prompt or self.project.style.prompt
+        # Detect if this is a water-only tile and select appropriate prompt
+        is_water = self._is_water_tile(result.reference_image)
+        if is_water:
+            if progress_callback:
+                progress_callback("Detected water tile, using water prompt")
+            prompt = WATER_TILE_PROMPT
+        else:
+            prompt = style_prompt or self.project.style.prompt
         last_error = None
 
         for attempt in range(max_retries):
