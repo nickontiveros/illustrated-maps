@@ -201,7 +201,11 @@ def info(project_path: str):
 
 @main.command()
 @click.argument("project_path", type=click.Path(exists=True))
-def preview_osm(project_path: str):
+@click.option("--detail-level", "-d",
+              type=click.Choice(["full", "simplified", "regional", "country", "auto"]),
+              default="auto",
+              help="OSM detail level (auto selects based on region size)")
+def preview_osm(project_path: str, detail_level: str):
     """Generate a preview of OSM data extraction."""
     project_file = Path(project_path)
 
@@ -211,16 +215,26 @@ def preview_osm(project_path: str):
     project = Project.from_yaml(project_file)
     project.ensure_directories()
 
-    console.print(f"[bold]Fetching OSM data for:[/bold] {project.name}")
+    # Calculate region info
+    area_km2 = project.region.calculate_area_km2()
+    recommended_detail = project.region.get_recommended_detail_level()
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Fetching OSM data...", total=None)
-        osm_data = _fetch_osm_data(project)
-        progress.update(task, completed=True)
+    # Use recommended detail level if auto
+    if detail_level == "auto":
+        actual_detail = recommended_detail.value
+    else:
+        actual_detail = detail_level
+
+    console.print(f"[bold]Fetching OSM data for:[/bold] {project.name}")
+    console.print(f"[bold]Region area:[/bold] {area_km2:,.0f} km²")
+    console.print(f"[bold]Detail level:[/bold] {actual_detail}")
+
+    if actual_detail == "full" and area_km2 > 1000:
+        console.print("[yellow]Warning:[/yellow] Full detail on large regions may be slow or fail.")
+        console.print(f"[dim]Recommended: --detail-level {recommended_detail.value}[/dim]")
+
+    console.print("\n[dim]Fetching OSM data (this may take a while for large regions)...[/dim]")
+    osm_data = _fetch_osm_data(project, detail_level=actual_detail)
 
     # Print summary
     console.print("\n[bold]OSM Data Summary:[/bold]")
@@ -250,13 +264,13 @@ def preview_osm(project_path: str):
     console.print(f"\n[green]Saved preview:[/green] {preview_path}")
 
 
-def _fetch_osm_data(project: Project):
+def _fetch_osm_data(project: Project, detail_level: str = "full"):
     """Fetch OSM data for project."""
     from .services.osm_service import OSMService
 
     config = get_config()
     osm_service = OSMService(cache_dir=str(config.cache_dir / "osm"))
-    return osm_service.fetch_region_data(project.region)
+    return osm_service.fetch_region_data(project.region, detail_level=detail_level)
 
 
 def _fetch_elevation_data(project: Project):

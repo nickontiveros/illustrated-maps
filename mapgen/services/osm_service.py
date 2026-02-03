@@ -110,15 +110,45 @@ class OSMService:
         elif detail_level == "country":
             return self.fetch_country_region_data(bbox)
 
+        # Full detail level with verbose logging
+        import sys
         data = OSMData()
 
-        # Fetch each data type
+        print("  [OSM] Fetching all roads...", end=" ", flush=True)
+        sys.stdout.flush()
         data.roads = self.extract_roads(bbox)
+        road_count = len(data.roads) if data.roads is not None else 0
+        print(f"({road_count} features)")
+
+        print("  [OSM] Fetching all buildings...", end=" ", flush=True)
+        sys.stdout.flush()
         data.buildings = self.extract_buildings(bbox)
+        building_count = len(data.buildings) if data.buildings is not None else 0
+        print(f"({building_count} features)")
+
+        print("  [OSM] Fetching water...", end=" ", flush=True)
+        sys.stdout.flush()
         data.water = self.extract_water(bbox)
+        water_count = len(data.water) if data.water is not None else 0
+        print(f"({water_count} features)")
+
+        print("  [OSM] Fetching parks...", end=" ", flush=True)
+        sys.stdout.flush()
         data.parks = self.extract_parks(bbox)
+        park_count = len(data.parks) if data.parks is not None else 0
+        print(f"({park_count} features)")
+
+        print("  [OSM] Fetching terrain types...", end=" ", flush=True)
+        sys.stdout.flush()
         data.terrain_types = self.extract_terrain_types(bbox)
+        terrain_count = len(data.terrain_types) if data.terrain_types is not None else 0
+        print(f"({terrain_count} features)")
+
+        print("  [OSM] Fetching railways...", end=" ", flush=True)
+        sys.stdout.flush()
         data.railways = self.extract_railways(bbox)
+        railway_count = len(data.railways) if data.railways is not None else 0
+        print(f"({railway_count} features)")
 
         return data
 
