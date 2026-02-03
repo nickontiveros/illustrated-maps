@@ -25,7 +25,11 @@ build/
 .DS_Store
 Thumbs.db
 
-# Project outputs - regeneratable
+# Project folders - ignore all except nyc_example
+projects/*
+!projects/nyc_example/
+
+# Project outputs - regeneratable (for nyc_example)
 projects/*/output/
 projects/*/landmarks/*.png
 projects/*/landmarks/*.jpg
