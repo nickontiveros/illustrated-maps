@@ -45,10 +45,24 @@ upscaling = [
 psd = [
     "psd-tools>=1.9.0",
 ]
+api = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.0.0",
+    "pyvips>=2.2.0",
+]
 all = [
     "realesrgan>=0.3.0",
     "basicsr>=1.4.0",
     "psd-tools>=1.9.0",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.0.0",
+    "pyvips>=2.2.0",
 ]
 
 [project.scripts]

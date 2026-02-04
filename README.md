@@ -20,7 +20,7 @@ Generate poster-size illustrated maps in the style of hand illustrated tourist m
 - Python 3.10+
 - Google Cloud account with Gemini API access
 
-### Setup
+### Option 1: CLI Only (Recommended for most users)
 
 ```bash
 # Clone the repository
@@ -31,25 +31,54 @@ cd illustrated-maps
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
+# Install CLI package
+pip install -e .
 
 # Set up API keys
 export GOOGLE_API_KEY="your-google-api-key"
 export MAPBOX_ACCESS_TOKEN="your-mapbox-token"  # For satellite imagery
 ```
 
-### Optional: Real-ESRGAN for Outpainting
+### Option 2: Full Stack (CLI + Web UI)
 
-For high-quality outpainting of map edges, install Real-ESRGAN:
+Includes a visual web interface for interactive map generation.
 
 ```bash
-pip install realesrgan basicsr
+# Clone and set up Python environment (same as above)
+git clone https://github.com/nickontiveros/illustrated-maps.git
+cd illustrated-maps
+python -m venv .venv
+source .venv/bin/activate
+
+# Install CLI + API dependencies
+pip install -e ".[api]"
+
+# Install frontend (requires Node.js 18+)
+cd frontend
+npm install
+cd ..
+
+# Set up API keys
+export GOOGLE_API_KEY="your-google-api-key"
+export MAPBOX_ACCESS_TOKEN="your-mapbox-token"
 ```
 
-The model weights will be downloaded automatically on first use.
+### Optional Dependencies
+
+```bash
+# Real-ESRGAN for high-quality outpainting
+pip install -e ".[upscaling]"
+
+# PSD export support
+pip install -e ".[psd]"
+
+# All optional features
+pip install -e ".[all]"
+```
 
 ## Quick Start
+
+### Using the CLI
 
 ```bash
 # 1. Initialize a new project (optionally set orientation)
@@ -67,6 +96,33 @@ mapgen outpaint projects/my_city/ -i output/illustrated.png
 # 4. Export as layered PSD
 mapgen export-psd projects/my_city/ --base-map output/illustrated_outpainted.png -o map.psd
 ```
+
+### Using the Web UI
+
+If you installed the full stack (Option 2), start the development servers:
+
+```bash
+# Start both backend and frontend
+./run_dev.sh
+
+# Or start them separately:
+# Terminal 1: API backend
+uvicorn mapgen.api.main:app --reload --port 8000
+
+# Terminal 2: Frontend
+cd frontend && npm run dev
+```
+
+Then open http://localhost:5173 in your browser.
+
+**Web UI Features:**
+- **Project Management** - Create and manage map projects visually
+- **Interactive Map** - Geographic view with tile grid overlay
+- **Real-time Progress** - Watch tiles generate with WebSocket updates
+- **Tile Inspector** - Click tiles to view reference/generated images
+- **Seam Repair** - Visual interface for fixing tile boundaries
+- **Landmark Placement** - Drag-and-drop landmark positioning
+- **Deep Zoom Viewer** - Pan and zoom on large assembled images
 
 ## Complete Workflow
 

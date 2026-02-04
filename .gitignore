@@ -57,3 +57,10 @@ projects/*/logos/
 
 # Claude Code
 .claude/
+
+# Frontend (Node.js)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.log
+npm-debug.log*
