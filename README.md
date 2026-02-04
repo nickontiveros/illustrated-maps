@@ -1,6 +1,6 @@
 # Illustrated Map Generator
 
-Generate poster-size illustrated maps in the style of classic Disneyland theme park maps. Transform any geographic region into a beautiful hand-painted style illustration with AI-powered generation.
+Generate poster-size illustrated maps in the style of hand illustrated tourist maps. Transform any geographic region into a beautiful hand-painted style illustration with AI-powered generation.
 
 ## Features
 
@@ -10,6 +10,8 @@ Generate poster-size illustrated maps in the style of classic Disneyland theme p
 - **Perspective Transform**: Creates an aerial/isometric view with horizon and atmospheric perspective
 - **Layered PSD Export**: Export as layered Photoshop file for post-editing
 - **Tiled Generation**: Handles large maps by generating overlapping tiles and blending seamlessly
+- **Flexible Orientation**: Set any cardinal direction (north, south, east, west) as "up" on the map
+- **Cache Management**: Clear cached tiles to force regeneration after prompt or setting changes
 
 ## Installation
 
@@ -50,9 +52,10 @@ The model weights will be downloaded automatically on first use.
 ## Quick Start
 
 ```bash
-# 1. Initialize a new project
+# 1. Initialize a new project (optionally set orientation)
 mapgen init --name "My City Map" \
   --north 40.758 --south 40.700 --east -73.970 --west -74.020 \
+  --orientation north \
   -o projects/my_city
 
 # 2. Generate the illustrated map tiles
@@ -78,8 +81,11 @@ mapgen init \
   --south 40.7000 \
   --east -73.9700 \
   --west -74.0200 \
+  --orientation north \
   -o projects/nyc
 ```
+
+The `--orientation` option sets which cardinal direction appears at the top of the map (default: north). Use `east`, `south`, or `west` for different orientations.
 
 This creates:
 ```
@@ -227,10 +233,10 @@ output:
 
 style:
   perspective_angle: 35.264   # Isometric angle
+  orientation: north          # Which direction is "up" (north/south/east/west)
   prompt: |
-    Transform this map into a vibrant illustrated theme park map style,
-    similar to classic Disneyland park maps. Use a hand-painted illustration
-    aesthetic with warm, saturated colors...
+    Transform this map into a hand illustrated tourist map style.
+    Use a hand-painted illustration aesthetic with warm, muted colors...
 
 tiles:
   size: 2048        # Tile size in pixels
@@ -263,6 +269,8 @@ landmarks:
 |---------|-------------|
 | `mapgen init` | Create a new project |
 | `mapgen info PROJECT` | Show project information |
+| `mapgen set-orientation PROJECT DIRECTION` | Set map orientation (north/south/east/west) |
+| `mapgen clear-cache PROJECT` | Clear cached tiles to force regeneration |
 
 ### Preview & Testing
 
@@ -312,16 +320,38 @@ landmarks:
 
 ## Customization
 
+### Map Orientation
+
+Set which cardinal direction appears at the top of your map:
+
+```bash
+# During project creation
+mapgen init --name "Tokyo Bay" --orientation east ...
+
+# For existing projects
+mapgen set-orientation projects/tokyo/ east
+
+# Clear cache after changing orientation
+mapgen clear-cache projects/tokyo/
+```
+
+| Orientation | Effect |
+|-------------|--------|
+| `north` | North is up (default, traditional orientation) |
+| `east` | East is up (map rotated 90° counter-clockwise) |
+| `south` | South is up (map rotated 180°) |
+| `west` | West is up (map rotated 90° clockwise) |
+
 ### Style Prompt
 
 The illustration style is controlled by the `style.prompt` field in `project.yaml`. Customize it to achieve different looks:
 
-**Theme Park Style (Default)**
+**Hand Illustrated Tourist Map (Default)**
 ```yaml
 prompt: |
-  Transform this map into a vibrant illustrated theme park map style,
-  similar to classic Disneyland park maps. Use a hand-painted illustration
-  aesthetic with warm, saturated colors.
+  Transform this map into a hand illustrated tourist map.
+  Use a hand-painted illustration aesthetic with warm, muted colors.
+  Follow the geography exactly - do not add or remove features.
 ```
 
 **Watercolor Style**
@@ -397,6 +427,20 @@ If tiles don't match each other:
 1. Use `mapgen regenerate-tile` to regenerate problem tiles
 2. Use `mapgen repair-seam` to fix discontinuities at seams
 3. Consider a more specific style prompt
+4. Clear cache and regenerate: `mapgen clear-cache PROJECT && mapgen generate-tiles PROJECT`
+
+### Aspect Ratio Distortion
+
+If `mapgen info` shows an aspect ratio warning, your map region doesn't match the output dimensions:
+
+```
+Warning: Aspect ratio mismatch!
+  Geographic aspect ratio: 1.150
+  Output aspect ratio: 0.707
+  Distortion: 0.61x (horizontal compression)
+```
+
+Fix by updating `output.width` and `output.height` in `project.yaml` to match the recommended dimensions shown.
 
 ### Large PSD Files
 
@@ -442,6 +486,18 @@ mapgen init --name "San Francisco" \
   -o projects/sf
 
 mapgen generate-tiles projects/sf/
+```
+
+### Tokyo Bay (East-Up Orientation)
+
+```bash
+# Create with east-up orientation for a different perspective
+mapgen init --name "Tokyo Bay" \
+  --north 35.7 --south 35.4 --east 140.1 --west 139.6 \
+  --orientation east \
+  -o projects/tokyo
+
+mapgen generate-tiles projects/tokyo/
 ```
 
 ### Custom Small Area

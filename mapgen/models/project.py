@@ -11,6 +11,25 @@ from pydantic import BaseModel, Field
 from .landmark import Landmark
 
 
+class CardinalDirection(str, Enum):
+    """Cardinal direction for map orientation (which direction is 'up')."""
+
+    NORTH = "north"  # Default - north is up
+    SOUTH = "south"  # South is up (map rotated 180°)
+    EAST = "east"    # East is up (map rotated 90° counter-clockwise)
+    WEST = "west"    # West is up (map rotated 90° clockwise)
+
+    @property
+    def rotation_degrees(self) -> int:
+        """Get the rotation angle in degrees (counter-clockwise from north-up)."""
+        return {
+            CardinalDirection.NORTH: 0,
+            CardinalDirection.EAST: 90,
+            CardinalDirection.SOUTH: 180,
+            CardinalDirection.WEST: 270,
+        }[self]
+
+
 class DetailLevel(str, Enum):
     """Level of detail for OSM data extraction based on region size."""
 
@@ -27,6 +46,43 @@ DETAIL_LEVEL_THRESHOLDS = {
     DetailLevel.REGIONAL: 50_000,
     # COUNTRY is for anything larger
 }
+
+
+def calculate_adjusted_dimensions(
+    geo_aspect: float,
+    target_area_pixels: int = 7016 * 9933,  # A1 area
+    max_dimension: int = 12000,
+) -> tuple[int, int]:
+    """Calculate output dimensions matching geographic aspect ratio.
+
+    Adjusts output dimensions to match the geographic aspect ratio while
+    maintaining a similar total pixel area. This prevents distortion when
+    the region's shape doesn't match the default A1 portrait dimensions.
+
+    Args:
+        geo_aspect: Geographic aspect ratio (width/height in degrees,
+                   adjusted for latitude)
+        target_area_pixels: Target total pixel area (default: A1 at 300 DPI)
+        max_dimension: Maximum allowed dimension in pixels
+
+    Returns:
+        Tuple of (width, height) in pixels
+    """
+    # width * height = target_area
+    # width / height = geo_aspect
+    # Therefore: width = sqrt(target_area * geo_aspect)
+    width = int(math.sqrt(target_area_pixels * geo_aspect))
+    height = int(target_area_pixels / width)
+
+    # Clamp to max dimension
+    if width > max_dimension:
+        width = max_dimension
+        height = int(width / geo_aspect)
+    if height > max_dimension:
+        height = max_dimension
+        width = int(height * geo_aspect)
+
+    return width, height
 
 
 def get_recommended_detail_level(area_km2: float) -> DetailLevel:
@@ -111,6 +167,19 @@ class BoundingBox(BaseModel):
         """
         return get_recommended_detail_level(self.calculate_area_km2())
 
+    @property
+    def geographic_aspect_ratio(self) -> float:
+        """Calculate the true geographic aspect ratio (width/height).
+
+        Accounts for the fact that longitude degrees are shorter at higher
+        latitudes. Uses the center latitude for the correction factor.
+        """
+        center_lat = (self.north + self.south) / 2
+        lat_correction = math.cos(math.radians(center_lat))
+        # Width in "corrected" degrees, height in latitude degrees
+        corrected_width = self.width_degrees * lat_correction
+        return corrected_width / self.height_degrees
+
     def to_tuple(self) -> tuple[float, float, float, float]:
         """Return as (north, south, east, west) tuple for OSMnx."""
         return (self.north, self.south, self.east, self.west)
@@ -142,12 +211,16 @@ class StyleSettings(BaseModel):
         le=60,
         description="Isometric projection angle in degrees",
     )
+    orientation: CardinalDirection = Field(
+        default=CardinalDirection.NORTH,
+        description="Which cardinal direction is 'up' on the map",
+    )
     prompt: str = Field(
         default=(
-            "Transform this map into a vibrant illustrated theme park map style, "
-            "similar to Disneyland park maps. Hand-painted illustration aesthetic with "
-            "warm, saturated colors. Isometric aerial view perspective. Maintain exact "
-            "layout of roads, buildings, and features. Clean edges suitable for tiling."
+            "Transform this map into a hand illustrated tourist map style. "
+            "Hand-painted illustration aesthetic with warm, muted colors. "
+            "Aerial view perspective. Maintain exact layout of roads, buildings, "
+            "and features. Clean edges suitable for tiling."
         ),
         description="Base prompt for Gemini image generation",
     )

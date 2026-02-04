@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .config import get_config
-from .models.project import BoundingBox, DetailLevel, Project, get_recommended_detail_level
+from .models.project import BoundingBox, CardinalDirection, DetailLevel, Project, get_recommended_detail_level
 
 
 def timestamped_filename(base_name: str, extension: str = "png") -> str:
@@ -146,15 +146,28 @@ def generate(
 @click.option("--south", type=float, required=True, help="South latitude")
 @click.option("--east", type=float, required=True, help="East longitude")
 @click.option("--west", type=float, required=True, help="West longitude")
+@click.option("--orientation", type=click.Choice(["north", "south", "east", "west"]),
+              default="north", help="Which direction is 'up' on the map (default: north)")
 @click.option("--output", "-o", type=click.Path(), help="Output directory")
-def init(name: str, north: float, south: float, east: float, west: float, output: Optional[str]):
+def init(
+    name: str,
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+    orientation: str,
+    output: Optional[str],
+):
     """Initialize a new map project."""
+    from .models.project import StyleSettings
+
     output_dir = Path(output) if output else Path.cwd() / name.replace(" ", "_").lower()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     project = Project(
         name=name,
         region=BoundingBox(north=north, south=south, east=east, west=west),
+        style=StyleSettings(orientation=CardinalDirection(orientation)),
     )
     project.project_dir = output_dir
 
@@ -166,6 +179,7 @@ def init(name: str, north: float, south: float, east: float, west: float, output
     project.ensure_directories()
 
     console.print(f"[green]Created project:[/green] {project_file}")
+    console.print(f"[dim]Orientation:[/dim] {orientation} is up")
     console.print(f"[dim]Add landmark photos to:[/dim] {project.landmarks_dir}")
     console.print(f"[dim]Add logo PNGs to:[/dim] {project.logos_dir}")
 
@@ -174,6 +188,8 @@ def init(name: str, north: float, south: float, east: float, west: float, output
 @click.argument("project_path", type=click.Path(exists=True))
 def info(project_path: str):
     """Show information about a project."""
+    from .models.project import calculate_adjusted_dimensions
+
     project_file = Path(project_path)
 
     if project_file.is_dir():
@@ -185,6 +201,11 @@ def info(project_path: str):
     area_km2 = project.region.calculate_area_km2()
     recommended_detail = project.region.get_recommended_detail_level()
 
+    # Calculate aspect ratios
+    geo_aspect = project.region.geographic_aspect_ratio
+    output_aspect = project.output.aspect_ratio
+    distortion_ratio = geo_aspect / output_aspect
+
     table = Table(title=f"Project: {project.name}")
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
@@ -194,16 +215,33 @@ def info(project_path: str):
     table.add_row("Region East", f"{project.region.east:.6f}")
     table.add_row("Region West", f"{project.region.west:.6f}")
     table.add_row("Region Area", f"{area_km2:,.0f} km²")
+    table.add_row("Geographic Aspect", f"{geo_aspect:.3f}")
     table.add_row("Output Width", f"{project.output.width} px")
     table.add_row("Output Height", f"{project.output.height} px")
+    table.add_row("Output Aspect", f"{output_aspect:.3f}")
     table.add_row("Output DPI", str(project.output.dpi))
     table.add_row("Tile Size", f"{project.tiles.size} px")
     table.add_row("Tile Overlap", f"{project.tiles.overlap} px")
+    table.add_row("Orientation", f"{project.style.orientation.value} is up")
 
     cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
     table.add_row("Tile Grid", f"{cols} x {rows} = {cols * rows} tiles")
 
     console.print(table)
+
+    # Show aspect ratio warning if significant distortion
+    if distortion_ratio < 0.8 or distortion_ratio > 1.25:
+        console.print(f"\n[yellow]Warning: Aspect ratio mismatch![/yellow]")
+        console.print(f"  Geographic aspect ratio: {geo_aspect:.3f}")
+        console.print(f"  Output aspect ratio: {output_aspect:.3f}")
+        console.print(f"  Distortion: {distortion_ratio:.2f}x " +
+                     ("(horizontal compression)" if distortion_ratio < 1 else "(vertical compression)"))
+
+        # Calculate recommended dimensions
+        recommended_w, recommended_h = calculate_adjusted_dimensions(geo_aspect)
+        console.print(f"\n[dim]Recommended output dimensions to match geography:[/dim]")
+        console.print(f"  {recommended_w} x {recommended_h} px")
+        console.print(f"[dim]Update project.yaml output.width and output.height to fix.[/dim]")
 
     # Show detail level recommendation with warning for large regions
     console.print(f"\n[bold]Recommended Detail Level:[/bold] {recommended_detail.value}")
@@ -852,6 +890,79 @@ def _render_composite(
         osm_opacity=0.5,
         apply_perspective=apply_perspective,
     )
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.option("--tiles-only", is_flag=True, help="Clear only generated tiles")
+@click.option("--all", "clear_all", is_flag=True, help="Clear all cached data")
+def clear_cache(project_path: str, tiles_only: bool, clear_all: bool):
+    """Clear cached data for a project to force regeneration.
+
+    By default, clears only generated tiles (Gemini output).
+    Use --all to clear all cached data including satellite imagery and OSM data.
+
+    Examples:
+        mapgen clear-cache projects/okinawa/
+        mapgen clear-cache projects/okinawa/ --all
+    """
+    import shutil
+
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+    config = get_config()
+    project_cache = get_project_cache_dir(config, project)
+
+    if clear_all:
+        if project_cache.exists():
+            shutil.rmtree(project_cache, ignore_errors=True)
+            console.print(f"[green]Cleared all cache for {project.name}[/green]")
+            console.print(f"[dim]Removed: {project_cache}[/dim]")
+        else:
+            console.print(f"[yellow]No cache found for {project.name}[/yellow]")
+    else:
+        # Default: clear generated tiles only
+        tiles_dir = project_cache / "generation" / "generated"
+        if tiles_dir.exists():
+            shutil.rmtree(tiles_dir, ignore_errors=True)
+            console.print(f"[green]Cleared generated tiles for {project.name}[/green]")
+            console.print(f"[dim]Removed: {tiles_dir}[/dim]")
+        else:
+            console.print(f"[yellow]No generated tiles found for {project.name}[/yellow]")
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.argument("direction", type=click.Choice(["north", "south", "east", "west"]))
+def set_orientation(project_path: str, direction: str):
+    """Set which cardinal direction is 'up' on the map.
+
+    This affects how the map is rendered - the specified direction will
+    be at the top of the generated map.
+
+    Examples:
+        mapgen set-orientation projects/tokyo/ east
+        mapgen set-orientation projects/sf/ south
+    """
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+    old_orientation = project.style.orientation.value
+
+    project.style.orientation = CardinalDirection(direction)
+    project.to_yaml(project_file)
+
+    console.print(f"[green]Updated orientation for {project.name}[/green]")
+    console.print(f"  {old_orientation} → {direction}")
+
+    if old_orientation != direction:
+        console.print(f"\n[yellow]Note:[/yellow] You should clear the cache and regenerate tiles:")
+        console.print(f"  mapgen clear-cache {project_path}")
 
 
 @main.command()

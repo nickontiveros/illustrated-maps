@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import numpy as np
 from PIL import Image
 
-from ..models.project import BoundingBox, DetailLevel, Project, get_recommended_detail_level
+from ..models.project import BoundingBox, CardinalDirection, DetailLevel, Project, get_recommended_detail_level
 from .blending_service import BlendingService, TileInfo
 from .gemini_service import GeminiService, GenerationResult
 from .osm_service import OSMData, OSMService
@@ -34,11 +34,12 @@ WATER_VARIANCE_THRESHOLD = 500  # Max variance in pixel values for uniform tile
 
 # Prompt for water-only tiles
 WATER_TILE_PROMPT = (
-    "Generate stylized illustrated ocean water in a vibrant theme park map style. "
-    "Create gentle, hand-painted waves with warm blue-green tones. "
-    "The water should have subtle color variation and texture like a classic "
-    "Disneyland park map ocean - not flat or photorealistic. "
-    "Fill the entire tile with continuous water that will seamlessly tile with adjacent water areas."
+    "Generate illustrated ocean water in a hand illustrated tourist map style. "
+    "Create gentle, stylized waves with soft blue-green tones. "
+    "The water should have subtle color variation and hand-painted texture. "
+    "Use muted, warm colors that match a classic illustrated map aesthetic. "
+    "Fill the entire tile with continuous water that tiles seamlessly. "
+    "DO NOT include: land, boats, sea creatures, or any other elements."
 )
 
 
@@ -137,6 +138,9 @@ class GenerationService:
         self._osm_data: Optional[OSMData] = None
         self._osm_tile_cache: dict[tuple[int, int], OSMData] = {}
 
+        # Store orientation for rotation
+        self._orientation = project.style.orientation
+
     @property
     def region_area_km2(self) -> float:
         """Return the region area in square kilometers."""
@@ -171,6 +175,28 @@ class GenerationService:
             cache_path = str(self.cache_dir / "osm") if self.cache_dir else None
             self._osm = OSMService(cache_dir=cache_path)
         return self._osm
+
+    def _apply_orientation_rotation(self, image: Image.Image) -> Image.Image:
+        """Apply rotation based on map orientation setting.
+
+        Rotates the image so the configured cardinal direction is 'up'.
+
+        Args:
+            image: Image to rotate
+
+        Returns:
+            Rotated image (or original if orientation is north)
+        """
+        rotation = self._orientation.rotation_degrees
+        if rotation == 0:
+            return image
+        elif rotation == 90:
+            return image.transpose(Image.Transpose.ROTATE_90)
+        elif rotation == 180:
+            return image.transpose(Image.Transpose.ROTATE_180)
+        elif rotation == 270:
+            return image.transpose(Image.Transpose.ROTATE_270)
+        return image
 
     def calculate_tile_specs(self) -> list[TileSpec]:
         """
@@ -425,6 +451,9 @@ class GenerationService:
             osm_opacity=0.5,
             apply_perspective=apply_perspective,
         )
+
+        # Apply orientation rotation if not north-up
+        composite = self._apply_orientation_rotation(composite)
 
         return composite
 
