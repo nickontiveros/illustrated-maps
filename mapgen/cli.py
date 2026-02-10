@@ -991,11 +991,8 @@ def list_seams(project_path: str):
     console.print(f"[bold]Tile size:[/bold] {project.tiles.size}px with {project.tiles.overlap}px overlap\n")
 
     # Get all seams
-    repair_service = SeamRepairService(
-        tile_size=project.tiles.size,
-        overlap=project.tiles.overlap,
-    )
-    seams = repair_service.identify_seams(cols, rows)
+    repair_service = SeamRepairService()
+    seams = repair_service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     # Split into horizontal and vertical
     h_seams = [s for s in seams if s.orientation == "horizontal"]
@@ -1075,14 +1072,11 @@ def repair_seam(
     cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
 
     # Create services
-    repair_service = SeamRepairService(
-        tile_size=project.tiles.size,
-        overlap=project.tiles.overlap,
-    )
+    repair_service = SeamRepairService()
     gemini = GeminiService()
 
     # Get all seams
-    all_seams = repair_service.identify_seams(cols, rows)
+    all_seams = repair_service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     # Parse requested seams
     seams_to_repair = []
@@ -1118,7 +1112,6 @@ def repair_seam(
         console.print(f"[dim]Using: {input_path}[/dim]")
 
     assembled = Image.open(input_path).convert("RGBA")
-    cache_dir = project_cache / "generation"
 
     # Repair seams
     with Progress(
@@ -1129,15 +1122,7 @@ def repair_seam(
         for seam in seams_to_repair:
             task = progress.add_task(f"Repairing {seam.id}...", total=None)
 
-            # Load tiles
-            tile_a = repair_service.load_tile(cache_dir, seam.tile_a[0], seam.tile_a[1])
-            tile_b = repair_service.load_tile(cache_dir, seam.tile_b[0], seam.tile_b[1])
-
-            if tile_a is None or tile_b is None:
-                progress.update(task, description=f"[red]Missing tiles for {seam.id}[/red]")
-                continue
-
-            result = repair_service.repair_seam(seam, tile_a, tile_b, gemini)
+            result = repair_service.repair_seam(seam, assembled, gemini)
 
             if result.error:
                 progress.update(task, description=f"[red]Failed: {seam.id} - {result.error}[/red]")

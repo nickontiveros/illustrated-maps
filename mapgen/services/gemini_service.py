@@ -265,46 +265,23 @@ class GeminiService:
 
     def inpaint_seam(
         self,
-        tile_a: Image.Image,
-        tile_b: Image.Image,
-        overlap_region: tuple[int, int, int, int],
+        seam_region: Image.Image,
         orientation: str = "horizontal",
     ) -> GenerationResult:
         """
-        Inpaint seam between two tiles.
+        Inpaint a seam strip extracted from the assembled image.
+
+        The strip is centered on the cell boundary and already shows the
+        discontinuity that needs to be blended.
 
         Args:
-            tile_a: First tile image
-            tile_b: Second tile image
-            overlap_region: (x, y, width, height) of overlap region
+            seam_region: Strip cropped from the assembled image around the seam
             orientation: "horizontal" or "vertical" seam
 
         Returns:
-            GenerationResult with inpainted overlap region
+            GenerationResult with inpainted region
         """
         from google.genai import types
-
-        # Extract overlap regions from both tiles
-        x, y, w, h = overlap_region
-
-        if orientation == "horizontal":
-            # Tiles are side by side
-            region_a = tile_a.crop((tile_a.width - w, y, tile_a.width, y + h))
-            region_b = tile_b.crop((0, y, w, y + h))
-        else:
-            # Tiles are stacked vertically
-            region_a = tile_a.crop((x, tile_a.height - h, x + w, tile_a.height))
-            region_b = tile_b.crop((x, 0, x + w, h))
-
-        # Combine regions for context
-        if orientation == "horizontal":
-            combined = Image.new("RGB", (w * 2, h))
-            combined.paste(region_a, (0, 0))
-            combined.paste(region_b, (w, 0))
-        else:
-            combined = Image.new("RGB", (w, h * 2))
-            combined.paste(region_a, (0, 0))
-            combined.paste(region_b, (0, h))
 
         prompt = self.STYLE_PROMPTS["inpaint_seam"]
 
@@ -312,7 +289,7 @@ class GeminiService:
 
         response = self.client.models.generate_content(
             model=self.model,
-            contents=[combined, prompt],
+            contents=[seam_region, prompt],
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
             ),
