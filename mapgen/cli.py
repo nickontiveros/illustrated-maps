@@ -2002,6 +2002,204 @@ def generate_full(
 
 @main.command()
 @click.argument("project_path", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--skip-existing", is_flag=True, default=True, help="Skip cached sections")
+@click.option("--region", "-r", multiple=True, help="Only generate specific regions by name (repeatable)")
+@click.option("--perspective/--no-perspective", default=True, help="Apply aerial perspective")
+@click.option("--dry-run", is_flag=True, help="Show layout info without generating")
+def generate_sectional(
+    project_path: str,
+    output: Optional[str],
+    skip_existing: bool,
+    region: tuple[str, ...],
+    perspective: bool,
+    dry_run: bool,
+):
+    """Generate a large-region map using sectional generation.
+
+    Two-tier approach for regions too large for monolithic tile generation:
+    1. Focus regions (cities) get high-detail AI-illustrated generation
+    2. Fill regions (desert/corridors) get rendered base maps
+    3. All sections are composed with blended edges
+    4. Perspective transform and rotation applied
+
+    The project must have a sectional_layout configured in project.yaml.
+
+    Examples:
+        mapgen generate-sectional projects/az/
+        mapgen generate-sectional projects/az/ -r "Phoenix Metro"  # Just one region
+        mapgen generate-sectional projects/az/ --dry-run
+    """
+    from rich.progress import BarColumn, TaskProgressColumn, TimeRemainingColumn
+    from rich.panel import Panel
+    from rich.text import Text
+
+    from .config import get_config
+    from .services.sectional_generation_service import (
+        SectionalGenerationService,
+        SectionalProgress,
+    )
+
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+    project.ensure_directories()
+
+    if project.sectional_layout is None:
+        console.print("[red]Error:[/red] Project does not have a sectional_layout configured.")
+        console.print("[dim]Add a sectional_layout section to project.yaml[/dim]")
+        raise SystemExit(1)
+
+    layout = project.sectional_layout
+    config = get_config()
+    project_cache = get_project_cache_dir(config, project)
+
+    # Show layout summary
+    console.print(f"[bold]Project:[/bold] {project.name}")
+    console.print(f"[bold]Orientation:[/bold] {project.style.effective_rotation_degrees}°")
+    console.print(f"[bold]Output size:[/bold] {project.output.width} x {project.output.height} px")
+    console.print(f"[bold]Region area:[/bold] {project.region.calculate_area_km2():,.0f} km²")
+    console.print()
+
+    # Focus regions table
+    table = Table(title="Focus Regions (AI-illustrated)")
+    table.add_column("Name", style="cyan")
+    table.add_column("Detail", style="green")
+    table.add_column("Scale")
+    table.add_column("Landmarks", justify="right")
+    table.add_column("Area (km²)", justify="right")
+
+    for fr in layout.focus_regions:
+        table.add_row(
+            fr.name,
+            fr.detail_level.value,
+            f"{fr.scale_factor}x",
+            str(len(fr.landmark_names)),
+            f"{fr.bbox.calculate_area_km2():,.0f}",
+        )
+    console.print(table)
+
+    # Fill regions table
+    table2 = Table(title="Fill Regions (rendered)")
+    table2.add_column("Name", style="cyan")
+    table2.add_column("Highways", justify="center")
+    table2.add_column("Rivers", justify="center")
+    table2.add_column("AI Polish", justify="center")
+    table2.add_column("Area (km²)", justify="right")
+
+    for fr in layout.fill_regions:
+        table2.add_row(
+            fr.name,
+            "[green]✓[/green]" if fr.include_highways else "[dim]✗[/dim]",
+            "[green]✓[/green]" if fr.include_rivers else "[dim]✗[/dim]",
+            "[yellow]✓[/yellow]" if fr.use_ai_illustration else "[dim]✗[/dim]",
+            f"{fr.bbox.calculate_area_km2():,.0f}",
+        )
+    console.print(table2)
+
+    total_sections = len(layout.focus_regions) + len(layout.fill_regions)
+    ai_sections = len(layout.focus_regions) + sum(
+        1 for fr in layout.fill_regions if fr.use_ai_illustration
+    )
+    estimated_cost = ai_sections * 0.13
+
+    console.print(f"\n[bold]Total sections:[/bold] {total_sections}")
+    console.print(f"[bold]Estimated cost:[/bold] ${estimated_cost:.2f} ({ai_sections} AI calls)")
+
+    if layout.coordinate_mapping:
+        console.print(f"[bold]Coordinate mapping:[/bold] hand-tuned ({len(layout.coordinate_mapping.lat_control_points)} lat, {len(layout.coordinate_mapping.lon_control_points)} lon control points)")
+    else:
+        console.print(f"[bold]Coordinate mapping:[/bold] auto-computed from landmarks")
+
+    if dry_run:
+        console.print("\n[yellow]DRY RUN — no sections will be generated[/yellow]")
+        return
+
+    region_filter = list(region) if region else None
+    if region_filter:
+        console.print(f"\n[bold]Generating only:[/bold] {', '.join(region_filter)}")
+
+    if estimated_cost > 0 and not click.confirm(f"\nContinue?"):
+        console.print("[yellow]Cancelled[/yellow]")
+        return
+
+    # Initialize service
+    sgs = SectionalGenerationService(project, cache_dir=project_cache / "generation")
+
+    # Generate with progress
+    console.print("\n[bold cyan]Phase 1: Generating sections[/bold cyan]")
+
+    def progress_callback(progress: SectionalProgress):
+        section_name = progress.current_section or "..."
+        console.print(
+            f"  [{progress.completed_sections + progress.failed_sections}/{progress.total_sections}] "
+            f"[cyan]{section_name}[/cyan] "
+            f"({progress.elapsed_time:.0f}s elapsed)"
+        )
+
+    results, progress = sgs.generate_all_sections(
+        progress_callback=progress_callback,
+        skip_existing=skip_existing,
+        region_filter=region_filter,
+    )
+
+    # Report results
+    console.print(f"\n[bold]Section results:[/bold]")
+    for r in results:
+        if r.error:
+            console.print(f"  [red]✗[/red] {r.name} ({r.region_type}): {r.error}")
+        elif r.image:
+            console.print(
+                f"  [green]✓[/green] {r.name} ({r.region_type}): "
+                f"{r.image.width}x{r.image.height} in {r.generation_time:.1f}s"
+            )
+        else:
+            console.print(f"  [yellow]?[/yellow] {r.name} ({r.region_type}): no image")
+
+    console.print(
+        f"\n  Completed: {progress.completed_sections}, "
+        f"Failed: {progress.failed_sections}, "
+        f"Total time: {progress.elapsed_time:.0f}s"
+    )
+
+    if progress.completed_sections == 0:
+        console.print("[red]No sections generated successfully.[/red]")
+        raise SystemExit(1)
+
+    # Phase 2: Compose sections
+    console.print("\n[bold cyan]Phase 2: Composing sections[/bold cyan]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as prog:
+        task = prog.add_task("Composing sections...", total=None)
+        final_image = sgs.compose_sections(results, apply_perspective=perspective)
+        prog.update(task, completed=True, description="[green]Composition complete")
+
+    if final_image is None:
+        console.print("[red]Composition failed[/red]")
+        raise SystemExit(1)
+
+    # Save result
+    if output:
+        output_path = Path(output)
+    else:
+        base_name = project.name.replace(' ', '_') + "_sectional"
+        output_path = project.output_dir / timestamped_filename(base_name)
+
+    final_image.save(output_path)
+
+    console.print(f"\n[green]Complete![/green]")
+    console.print(f"[bold]Final image:[/bold] {output_path}")
+    console.print(f"[dim]Size: {final_image.width} x {final_image.height} px[/dim]")
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
 @click.option("--input", "-i", "input_file", type=click.Path(exists=True),
               help="Input perspective-transformed map image")
 @click.option("--output", "-o", type=click.Path(), help="Output file path")
