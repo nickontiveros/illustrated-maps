@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useProjects, useCreateProject, useDeleteProject } from '@/hooks/useProjects';
-import type { BoundingBox } from '@/types';
+import { useAppStore } from '@/stores/appStore';
 
 function ProjectList() {
   const { data: projects, isLoading, error } = useProjects();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
+  const activeGenerations = useAppStore((s) => s.activeGenerations);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [newProject, setNewProject] = useState({
     name: '',
     north: 40.758,
@@ -19,6 +21,7 @@ function ProjectList() {
 
   const handleCreate = async () => {
     if (!newProject.name.trim()) return;
+    setCreateError(null);
 
     try {
       await createProject.mutateAsync({
@@ -32,8 +35,9 @@ function ProjectList() {
       });
       setShowCreateModal(false);
       setNewProject({ name: '', north: 40.758, south: 40.7, east: -73.97, west: -74.02 });
-    } catch (e) {
-      console.error('Failed to create project:', e);
+    } catch (e: any) {
+      const message = e?.data?.detail || e?.message || 'Failed to create project';
+      setCreateError(message);
     }
   };
 
@@ -68,7 +72,7 @@ function ProjectList() {
           <p className="text-slate-600 mt-1">Illustrated Map Generator</p>
         </div>
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => { setCreateError(null); setShowCreateModal(true); }}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
         >
           New Project
@@ -81,7 +85,7 @@ function ProjectList() {
           <h2 className="text-xl font-semibold text-slate-700 mb-2">No projects yet</h2>
           <p className="text-slate-500 mb-6">Create your first illustrated map project to get started.</p>
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => { setCreateError(null); setShowCreateModal(true); }}
             className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors"
           >
             Create Project
@@ -99,7 +103,20 @@ function ProjectList() {
                   <div>Landmarks: {project.landmark_count}</div>
                 </div>
                 <div className="mt-4 flex items-center gap-2">
-                  {project.has_generated_tiles ? (
+                  {activeGenerations[project.name] ? (
+                    <>
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                        <span className="inline-block w-1.5 h-1.5 bg-blue-600 rounded-full animate-pulse mr-1" />
+                        Generating
+                      </span>
+                      {activeGenerations[project.name].progress && (
+                        <span className="text-xs text-slate-500">
+                          {activeGenerations[project.name].progress!.completed_tiles}/
+                          {activeGenerations[project.name].progress!.total_tiles} tiles
+                        </span>
+                      )}
+                    </>
+                  ) : project.has_generated_tiles ? (
                     <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
                       Generated
                     </span>
@@ -187,6 +204,12 @@ function ProjectList() {
                 </div>
               </div>
             </div>
+
+            {createError && (
+              <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">
+                {createError}
+              </div>
+            )}
 
             <div className="mt-6 flex justify-end gap-3">
               <button

@@ -121,6 +121,8 @@ class TileSpec(BaseModel):
     has_generated: bool = False
     generation_time: Optional[float] = None
     error: Optional[str] = None
+    offset_dx: int = 0
+    offset_dy: int = 0
 
 
 class TileGridResponse(BaseModel):
@@ -133,6 +135,29 @@ class TileGridResponse(BaseModel):
     overlap: int
     effective_size: int
     tiles: list[TileSpec]
+
+
+class TileOffsetRequest(BaseModel):
+    """Request to set a tile's position offset."""
+
+    dx: int = Field(..., ge=-50, le=50, description="Horizontal offset in pixels")
+    dy: int = Field(..., ge=-50, le=50, description="Vertical offset in pixels")
+
+
+class TileOffsetResponse(BaseModel):
+    """Response containing a tile's offset."""
+
+    col: int
+    row: int
+    dx: int = 0
+    dy: int = 0
+
+
+class AllTileOffsetsResponse(BaseModel):
+    """Response containing all tile offsets."""
+
+    project_name: str
+    offsets: list[TileOffsetResponse]
 
 
 class TileRegenerateRequest(BaseModel):

@@ -1,8 +1,10 @@
+import React from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useProject } from '@/hooks/useProjects';
 import { useAppStore } from '@/stores/appStore';
 import MapCanvas from './MapCanvas';
 import TileGrid from './TileGrid';
+import TileDetailPanel from './TileDetailPanel';
 import SeamRepair from './SeamRepair';
 import Landmarks from './Landmarks';
 import Generation from './Generation';
@@ -11,7 +13,13 @@ import DeepZoomViewer from './DeepZoomViewer';
 function ProjectView() {
   const { name } = useParams<{ name: string }>();
   const { data: project, isLoading, error } = useProject(name);
-  const { sidebarTab, setSidebarTab, mapViewMode, setMapViewMode } = useAppStore();
+  const { sidebarTab, setSidebarTab, mapViewMode, setMapViewMode, setCurrentProject } = useAppStore();
+
+  // Track which project is currently being viewed (for legacy store accessors)
+  React.useEffect(() => {
+    setCurrentProject(name ?? null);
+    return () => setCurrentProject(null);
+  }, [name, setCurrentProject]);
 
   if (isLoading) {
     return (
@@ -110,14 +118,26 @@ function ProjectView() {
             >
               Assembled Image
             </button>
+            <button
+              onClick={() => setMapViewMode('tile-detail')}
+              className={`px-3 py-1 text-sm rounded ${
+                mapViewMode === 'tile-detail'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Tile Detail
+            </button>
           </div>
 
-          {/* Map or Deep Zoom viewer */}
-          <div className="flex-1">
+          {/* Map, Deep Zoom viewer, or Tile Detail */}
+          <div className="flex-1 overflow-auto">
             {mapViewMode === 'geographic' ? (
               <MapCanvas project={project} />
-            ) : (
+            ) : mapViewMode === 'tiles' ? (
               <DeepZoomViewer projectName={name!} className="w-full h-full" />
+            ) : (
+              <TileDetailPanel projectName={name!} />
             )}
           </div>
         </div>

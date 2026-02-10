@@ -275,7 +275,7 @@ class Project(BaseModel):
 
     def to_yaml(self, path: Path) -> None:
         """Save project to YAML file."""
-        data = self.model_dump(exclude={"project_dir"})
+        data = self.model_dump(exclude={"project_dir"}, mode="json")
         with open(path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 

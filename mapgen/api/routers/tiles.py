@@ -4,19 +4,22 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse
 
 from ...config import get_config
 from ...models.project import BoundingBox, Project
 from ...services.generation_service import GenerationProgress, GenerationService, TileSpec as ServiceTileSpec
 from ..schemas import (
+    AllTileOffsetsResponse,
     GenerationProgress as ProgressSchema,
     GenerationStartRequest,
     GenerationStartResponse,
     GenerationStatus,
     SuccessResponse,
     TileGridResponse,
+    TileOffsetRequest,
+    TileOffsetResponse,
     TileRegenerateRequest,
     TileSpec,
     TileStatus,
@@ -30,9 +33,28 @@ router = APIRouter()
 def get_tile_cache_dirs(project_name: str) -> tuple[Path, Path]:
     """Get the cache directories for generated and reference tiles."""
     cache_dir = get_project_cache_dir(project_name)
-    generated_dir = cache_dir / "generation" / "generated"
-    reference_dir = cache_dir / "generation" / "references"
+    generated_dir = cache_dir / "generated"
+    reference_dir = cache_dir / "references"
     return generated_dir, reference_dir
+
+
+def load_tile_offsets(project_name: str) -> dict[str, dict[str, int]]:
+    """Load tile offsets from JSON file."""
+    import json
+    cache_dir = get_project_cache_dir(project_name)
+    offsets_path = cache_dir / "tile_offsets.json"
+    if offsets_path.exists():
+        return json.loads(offsets_path.read_text())
+    return {}
+
+
+def save_tile_offsets(project_name: str, offsets: dict[str, dict[str, int]]) -> None:
+    """Save tile offsets to JSON file."""
+    import json
+    cache_dir = get_project_cache_dir(project_name)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    offsets_path = cache_dir / "tile_offsets.json"
+    offsets_path.write_text(json.dumps(offsets, indent=2))
 
 
 def get_tile_status(project_name: str, col: int, row: int) -> tuple[TileStatus, bool, bool]:
@@ -43,7 +65,7 @@ def get_tile_status(project_name: str, col: int, row: int) -> tuple[TileStatus, 
     """
     generated_dir, reference_dir = get_tile_cache_dirs(project_name)
 
-    has_reference = (reference_dir / f"tile_{col}_{row}_reference.png").exists()
+    has_reference = (reference_dir / f"tile_{col}_{row}_ref.png").exists()
     has_generated = (generated_dir / f"tile_{col}_{row}.png").exists()
 
     if has_generated:
@@ -56,9 +78,15 @@ def get_tile_status(project_name: str, col: int, row: int) -> tuple[TileStatus, 
     return status, has_reference, has_generated
 
 
-def service_tile_to_api_tile(spec: ServiceTileSpec, project_name: str) -> TileSpec:
+def service_tile_to_api_tile(
+    spec: ServiceTileSpec,
+    project_name: str,
+    offsets: Optional[dict[str, dict[str, int]]] = None,
+) -> TileSpec:
     """Convert a service TileSpec to an API TileSpec."""
     status, has_reference, has_generated = get_tile_status(project_name, spec.col, spec.row)
+
+    tile_offset = (offsets or {}).get(f"{spec.col},{spec.row}", {})
 
     return TileSpec(
         col=spec.col,
@@ -70,6 +98,8 @@ def service_tile_to_api_tile(spec: ServiceTileSpec, project_name: str) -> TileSp
         status=status,
         has_reference=has_reference,
         has_generated=has_generated,
+        offset_dx=tile_offset.get("dx", 0),
+        offset_dy=tile_offset.get("dy", 0),
     )
 
 
@@ -87,7 +117,8 @@ async def get_tile_grid(name: str):
     specs = service.calculate_tile_specs()
     cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
 
-    tiles = [service_tile_to_api_tile(spec, name) for spec in specs]
+    offsets = load_tile_offsets(name)
+    tiles = [service_tile_to_api_tile(spec, name, offsets) for spec in specs]
 
     return TileGridResponse(
         project_name=name,
@@ -98,6 +129,21 @@ async def get_tile_grid(name: str):
         effective_size=project.tiles.effective_size,
         tiles=tiles,
     )
+
+
+@router.get("/{name}/tiles/offsets", response_model=AllTileOffsetsResponse)
+async def get_all_tile_offsets(name: str):
+    """Get all tile offsets for a project."""
+    load_project(name)  # Validate project exists
+    offsets = load_tile_offsets(name)
+    offset_list = []
+    for key, val in offsets.items():
+        col_str, row_str = key.split(",")
+        offset_list.append(TileOffsetResponse(
+            col=int(col_str), row=int(row_str),
+            dx=val.get("dx", 0), dy=val.get("dy", 0),
+        ))
+    return AllTileOffsetsResponse(project_name=name, offsets=offset_list)
 
 
 @router.get("/{name}/tiles/{col}/{row}")
@@ -113,9 +159,10 @@ async def get_tile_info(name: str, col: int, row: int):
     specs = service.calculate_tile_specs()
 
     # Find the matching tile
+    offsets = load_tile_offsets(name)
     for spec in specs:
         if spec.col == col and spec.row == row:
-            return service_tile_to_api_tile(spec, name)
+            return service_tile_to_api_tile(spec, name, offsets)
 
     raise HTTPException(status_code=404, detail=f"Tile ({col}, {row}) not found")
 
@@ -136,7 +183,7 @@ async def get_tile_reference(
         size: Optional size to resize to (for thumbnails)
     """
     _, reference_dir = get_tile_cache_dirs(name)
-    tile_path = reference_dir / f"tile_{col}_{row}_reference.png"
+    tile_path = reference_dir / f"tile_{col}_{row}_ref.png"
 
     if not tile_path.exists():
         raise HTTPException(status_code=404, detail="Reference image not found")
@@ -260,16 +307,103 @@ async def regenerate_tile(name: str, col: int, row: int, request: TileRegenerate
         raise HTTPException(status_code=404, detail=f"Tile ({col}, {row}) not found")
 
     # Generate reference if needed
-    if not (reference_dir / f"tile_{col}_{row}_reference.png").exists():
+    if not (reference_dir / f"tile_{col}_{row}_ref.png").exists():
         await asyncio.to_thread(service.generate_tile_reference, target_spec)
 
+    # Load style reference if available
+    style_ref = load_style_reference(name)
+
     # Generate the tile
-    result = await asyncio.to_thread(service.generate_tile, target_spec)
+    result = await asyncio.to_thread(
+        service.generate_tile, target_spec, style_reference=style_ref
+    )
 
     if result.error:
         raise HTTPException(status_code=500, detail=f"Tile generation failed: {result.error}")
 
     return SuccessResponse(message=f"Tile ({col}, {row}) regenerated successfully")
+
+
+@router.get("/{name}/tiles/{col}/{row}/offset", response_model=TileOffsetResponse)
+async def get_tile_offset(name: str, col: int, row: int):
+    """Get the position offset for a specific tile."""
+    offsets = load_tile_offsets(name)
+    key = f"{col},{row}"
+    offset = offsets.get(key, {})
+    return TileOffsetResponse(
+        col=col, row=row,
+        dx=offset.get("dx", 0), dy=offset.get("dy", 0),
+    )
+
+
+@router.put("/{name}/tiles/{col}/{row}/offset", response_model=TileOffsetResponse)
+async def set_tile_offset(name: str, col: int, row: int, request: TileOffsetRequest):
+    """Set the position offset for a specific tile."""
+    load_project(name)  # Validate project exists
+    offsets = load_tile_offsets(name)
+    key = f"{col},{row}"
+
+    if request.dx == 0 and request.dy == 0:
+        offsets.pop(key, None)
+    else:
+        offsets[key] = {"dx": request.dx, "dy": request.dy}
+
+    save_tile_offsets(name, offsets)
+    return TileOffsetResponse(col=col, row=row, dx=request.dx, dy=request.dy)
+
+
+def get_style_reference_path(project_name: str) -> Path:
+    """Get the path to the style reference image for a project."""
+    cache_dir = get_project_cache_dir(project_name)
+    return cache_dir / "style_reference.png"
+
+
+@router.post("/{name}/style-reference", response_model=SuccessResponse)
+async def upload_style_reference(name: str, file: UploadFile = File(...)):
+    """Upload a style reference image for consistent tile generation."""
+    load_project(name)  # Validate project exists
+
+    import io
+    from PIL import Image
+
+    contents = await file.read()
+    try:
+        img = Image.open(io.BytesIO(contents))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    ref_path = get_style_reference_path(name)
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(ref_path, format="PNG")
+
+    return SuccessResponse(message="Style reference uploaded")
+
+
+@router.get("/{name}/style-reference")
+async def get_style_reference(name: str):
+    """Get the current style reference image."""
+    ref_path = get_style_reference_path(name)
+    if not ref_path.exists():
+        raise HTTPException(status_code=404, detail="No style reference set")
+    return FileResponse(ref_path, media_type="image/png")
+
+
+@router.delete("/{name}/style-reference", response_model=SuccessResponse)
+async def delete_style_reference(name: str):
+    """Delete the style reference image."""
+    ref_path = get_style_reference_path(name)
+    if ref_path.exists():
+        ref_path.unlink()
+    return SuccessResponse(message="Style reference removed")
+
+
+def load_style_reference(project_name: str):
+    """Load the style reference image if it exists, returns PIL Image or None."""
+    ref_path = get_style_reference_path(project_name)
+    if ref_path.exists():
+        from PIL import Image
+        return Image.open(ref_path).convert("RGBA")
+    return None
 
 
 @router.post("/{name}/generate", response_model=GenerationStartResponse)
@@ -278,6 +412,21 @@ async def start_generation(name: str, request: GenerationStartRequest):
 
     Returns immediately with a task ID. Use WebSocket to track progress.
     """
+    import os
+
+    # Validate API keys before starting
+    missing_keys = []
+    if not os.environ.get("GOOGLE_API_KEY"):
+        missing_keys.append("GOOGLE_API_KEY")
+    if not os.environ.get("MAPBOX_ACCESS_TOKEN"):
+        missing_keys.append("MAPBOX_ACCESS_TOKEN")
+    if missing_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required environment variable(s): {', '.join(missing_keys)}. "
+            "Set them and restart the API server before generating."
+        )
+
     project = load_project(name)
 
     # Check if generation is already running
@@ -292,22 +441,41 @@ async def start_generation(name: str, request: GenerationStartRequest):
     cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
     total_tiles = cols * rows
 
-    async def run_generation():
-        """Run the generation in background."""
-        service = GenerationService(project=project, cache_dir=cache_dir)
+    # Load style reference if available
+    style_ref = load_style_reference(name)
 
-        # Generate tiles with progress callback
+    async def run_generation():
+        """Run the generation in background, then assemble tiles."""
+        service = GenerationService(project=project, cache_dir=cache_dir)
+        loop = asyncio.get_running_loop()
+
+        # Progress callback runs in worker thread, so schedule update on main loop
         def progress_callback(progress: GenerationProgress):
-            asyncio.create_task(
-                task_manager.update_progress(task_info.task_id, progress)
+            loop.call_soon_threadsafe(
+                asyncio.ensure_future,
+                task_manager.update_progress(task_info.task_id, progress),
             )
 
-        results = await asyncio.to_thread(
+        results, final_progress = await asyncio.to_thread(
             service.generate_all_tiles,
             progress_callback=progress_callback,
+            style_reference=style_ref,
         )
 
-        return results
+        # Auto-assemble tiles into final image
+        gen_offsets = load_tile_offsets(name)
+
+        def assemble():
+            assembled = service.assemble_tiles(results, apply_perspective=False, tile_offsets=gen_offsets)
+            if assembled is not None:
+                output_dir = project.project_dir / "output" if project.project_dir else Path("output")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = output_dir / "assembled.png"
+                assembled.save(output_path)
+
+        await asyncio.to_thread(assemble)
+
+        return results, final_progress
 
     task_info = await task_manager.create_task(
         project_name=name,
@@ -394,3 +562,50 @@ async def cancel_generation(name: str):
         raise HTTPException(status_code=500, detail="Failed to cancel generation")
 
     return SuccessResponse(message="Generation cancelled")
+
+
+@router.post("/{name}/assemble", response_model=SuccessResponse)
+async def assemble_tiles(name: str):
+    """Assemble cached tiles into a final image.
+
+    Loads generated tiles from cache and blends them into a single assembled image.
+    """
+    from ...services.generation_service import TileResult
+
+    project = load_project(name)
+    cache_dir = get_project_cache_dir(name)
+
+    service = GenerationService(project=project, cache_dir=cache_dir)
+    specs = service.calculate_tile_specs()
+
+    offsets = load_tile_offsets(name)
+
+    def do_assemble():
+        # Load cached tiles into TileResult objects
+        generated_dir = cache_dir / "generated"
+        results = []
+        for spec in specs:
+            tile_path = generated_dir / f"tile_{spec.col}_{spec.row}.png"
+            if tile_path.exists():
+                from PIL import Image
+                img = Image.open(tile_path).convert("RGBA")
+                results.append(TileResult(spec=spec, generated_image=img))
+
+        if not results:
+            return None
+
+        assembled = service.assemble_tiles(results, apply_perspective=False, tile_offsets=offsets)
+        if assembled is not None:
+            output_dir = project.project_dir / "output" if project.project_dir else Path("output")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / "assembled.png"
+            assembled.save(output_path)
+            return output_path
+        return None
+
+    result = await asyncio.to_thread(do_assemble)
+
+    if result is None:
+        raise HTTPException(status_code=400, detail="No generated tiles found to assemble")
+
+    return SuccessResponse(message=f"Assembled image saved to {result}")

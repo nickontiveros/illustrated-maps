@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { TileSpec, SeamInfo, LandmarkDetail } from '@/types';
+import type { TileSpec, SeamInfo, LandmarkDetail, GenerationProgress } from '@/types';
+
+export interface ActiveGeneration {
+  taskId: string;
+  projectName: string;
+  progress: GenerationProgress | null;
+}
 
 interface AppState {
   // Selected project
@@ -22,13 +28,14 @@ interface AppState {
   sidebarTab: 'tiles' | 'seams' | 'landmarks' | 'settings';
   setSidebarTab: (tab: 'tiles' | 'seams' | 'landmarks' | 'settings') => void;
 
-  // Generation task
-  activeTaskId: string | null;
-  setActiveTaskId: (taskId: string | null) => void;
+  // Active generations (keyed by project name)
+  activeGenerations: Record<string, ActiveGeneration>;
+  setActiveGeneration: (projectName: string, gen: ActiveGeneration | null) => void;
+  updateGenerationProgress: (projectName: string, progress: GenerationProgress) => void;
 
   // Map view mode
-  mapViewMode: 'geographic' | 'tiles';
-  setMapViewMode: (mode: 'geographic' | 'tiles') => void;
+  mapViewMode: 'geographic' | 'tiles' | 'tile-detail';
+  setMapViewMode: (mode: 'geographic' | 'tiles' | 'tile-detail') => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -47,8 +54,28 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarTab: 'tiles',
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
 
-  activeTaskId: null,
-  setActiveTaskId: (taskId) => set({ activeTaskId: taskId }),
+  activeGenerations: {},
+  setActiveGeneration: (projectName, gen) =>
+    set((state) => {
+      const next = { ...state.activeGenerations };
+      if (gen) {
+        next[projectName] = gen;
+      } else {
+        delete next[projectName];
+      }
+      return { activeGenerations: next };
+    }),
+  updateGenerationProgress: (projectName, progress) =>
+    set((state) => {
+      const existing = state.activeGenerations[projectName];
+      if (!existing) return state;
+      return {
+        activeGenerations: {
+          ...state.activeGenerations,
+          [projectName]: { ...existing, progress },
+        },
+      };
+    }),
 
   mapViewMode: 'geographic',
   setMapViewMode: (mode) => set({ mapViewMode: mode }),

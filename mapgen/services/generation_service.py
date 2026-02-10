@@ -396,6 +396,31 @@ class GenerationService:
 
         return is_water
 
+    def _tile_render_size(self, bbox: 'BoundingBox') -> tuple[int, int]:
+        """Calculate render dimensions that preserve the geographic aspect ratio.
+
+        Fits within tile_size × tile_size while matching the bbox's true
+        geographic aspect ratio (accounting for latitude correction).
+
+        Returns:
+            (width, height) in pixels
+        """
+        import math
+
+        tile_size = self.project.tiles.size
+        geo_aspect = bbox.geographic_aspect_ratio  # width / height
+
+        if geo_aspect >= 1.0:
+            # Wider than tall
+            w = tile_size
+            h = max(1, round(tile_size / geo_aspect))
+        else:
+            # Taller than wide
+            h = tile_size
+            w = max(1, round(tile_size * geo_aspect))
+
+        return (w, h)
+
     def generate_tile_reference(
         self,
         spec: TileSpec,
@@ -405,6 +430,9 @@ class GenerationService:
         """
         Generate reference image for a single tile.
 
+        The render dimensions match the tile's geographic aspect ratio so that
+        features are not squashed/stretched in the reference sent to Gemini.
+
         Args:
             spec: Tile specification
             apply_perspective: Whether to apply perspective transform
@@ -413,14 +441,14 @@ class GenerationService:
         Returns:
             Composite reference image (satellite + OSM)
         """
-        tile_size = self.project.tiles.size
+        render_size = self._tile_render_size(spec.bbox)
 
         # Fetch satellite imagery for tile
         if progress_callback:
             progress_callback("Fetching satellite imagery...")
         satellite_image = self.satellite.fetch_satellite_imagery(
             bbox=spec.bbox,
-            output_size=(tile_size, tile_size),
+            output_size=render_size,
         )
         if progress_callback:
             progress_callback("Satellite imagery fetched")
@@ -447,7 +475,7 @@ class GenerationService:
             satellite_image=satellite_image,
             osm_data=osm_data,
             bbox=spec.bbox,
-            output_size=(tile_size, tile_size),
+            output_size=render_size,
             osm_opacity=0.5,
             apply_perspective=apply_perspective,
         )
@@ -463,6 +491,7 @@ class GenerationService:
         style_prompt: Optional[str] = None,
         max_retries: int = 3,
         progress_callback: Optional[Callable[[str], None]] = None,
+        style_reference: Optional[Image.Image] = None,
     ) -> TileResult:
         """
         Generate a single illustrated tile.
@@ -472,6 +501,7 @@ class GenerationService:
             style_prompt: Custom style prompt (uses project default if None)
             max_retries: Maximum retries on failure
             progress_callback: Optional callback for progress updates
+            style_reference: Optional style reference image for visual consistency
 
         Returns:
             TileResult with generated image
@@ -520,6 +550,7 @@ class GenerationService:
                     reference_image=result.reference_image,
                     style_prompt=prompt,
                     tile_position=spec.position_desc,
+                    style_reference=style_reference,
                 )
 
                 result.generated_image = gen_result.image
@@ -548,6 +579,7 @@ class GenerationService:
         self,
         progress_callback: Optional[Callable[[GenerationProgress], None]] = None,
         max_retries: int = 3,
+        style_reference: Optional[Image.Image] = None,
     ) -> tuple[list[TileResult], GenerationProgress]:
         """
         Generate all tiles for the map.
@@ -555,6 +587,7 @@ class GenerationService:
         Args:
             progress_callback: Optional callback for progress updates
             max_retries: Maximum retries per tile
+            style_reference: Optional style reference image; if None, first successful tile is auto-captured
 
         Returns:
             Tuple of (list of TileResults, final progress)
@@ -572,17 +605,62 @@ class GenerationService:
         if not self._use_per_tile_osm:
             self.fetch_osm_data()
 
-        for spec in specs:
+        # If no style reference provided, generate the central tile first and use it
+        current_style_ref = style_reference
+
+        if current_style_ref is None and len(specs) > 1:
+            # Find the most central tile
+            mid_col = max(s.col for s in specs) / 2.0
+            mid_row = max(s.row for s in specs) / 2.0
+            center_spec = min(specs, key=lambda s: (s.col - mid_col) ** 2 + (s.row - mid_row) ** 2)
+
+            print(f"Generating central tile ({center_spec.col},{center_spec.row}) first as style reference")
+            progress.current_tile = center_spec
+            if progress_callback:
+                progress_callback(progress)
+
+            tile_start = time.time()
+            center_result = self.generate_tile(center_spec, max_retries=max_retries)
+            tile_time = time.time() - tile_start
+            progress.tile_times.append(tile_time)
+
+            if center_result.error:
+                progress.failed_tiles += 1
+                print(f"Central tile failed: {center_result.error}, proceeding without style reference")
+            else:
+                progress.completed_tiles += 1
+                current_style_ref = center_result.generated_image
+                print("Using central tile as style reference")
+
+            if progress_callback:
+                progress_callback(progress)
+
+            # Generate remaining tiles (skip the center tile we already did)
+            remaining_specs = [s for s in specs if not (s.col == center_spec.col and s.row == center_spec.row)]
+        else:
+            center_result = None
+            remaining_specs = specs
+
+        # Build results in original spec order
+        result_map: dict[tuple[int, int], 'TileResult'] = {}
+        if center_result is not None:
+            result_map[(center_spec.col, center_spec.row)] = center_result
+
+        for spec in remaining_specs:
             progress.current_tile = spec
 
             if progress_callback:
                 progress_callback(progress)
 
             tile_start = time.time()
-            result = self.generate_tile(spec, max_retries=max_retries)
+            result = self.generate_tile(
+                spec,
+                max_retries=max_retries,
+                style_reference=current_style_ref,
+            )
             tile_time = time.time() - tile_start
 
-            results.append(result)
+            result_map[(spec.col, spec.row)] = result
             progress.tile_times.append(tile_time)
 
             if result.error:
@@ -593,6 +671,8 @@ class GenerationService:
             if progress_callback:
                 progress_callback(progress)
 
+        # Return results in original spec order
+        results = [result_map[(s.col, s.row)] for s in specs]
         progress.current_tile = None
         return results, progress
 
@@ -600,13 +680,26 @@ class GenerationService:
         self,
         results: list[TileResult],
         apply_perspective: bool = True,
+        tile_offsets: Optional[dict[str, dict[str, int]]] = None,
     ) -> Optional[Image.Image]:
         """
         Assemble generated tiles into final image.
 
+        Each tile is generated at size×size pixels covering a geographic bbox
+        that varies per tile (edge tiles have overlap on fewer sides). This means
+        tiles have different pixels-per-degree scales, and the geographic overlap
+        does NOT map to a fixed number of pixels.
+
+        To assemble correctly, we:
+        1. Compute each tile's unique geographic contribution (its grid cell, no overlap)
+        2. Convert that to a pixel crop within the tile (based on its actual bbox)
+        3. Resize each contribution to a uniform pixel size
+        4. Place contributions edge-to-edge
+
         Args:
             results: List of TileResult objects
             apply_perspective: Whether to apply perspective to final image
+            tile_offsets: Optional dict of "col,row" -> {"dx": int, "dy": int} offsets
 
         Returns:
             Final assembled image, or None if too many failures
@@ -618,46 +711,76 @@ class GenerationService:
             # Too many failures
             return None
 
-        # Expected tile size
-        expected_size = self.project.tiles.size
         tiles_config = self.project.tiles
         output_config = self.project.output
+        region = self.project.region
 
-        # Calculate the natural grid dimensions that fit all tiles without clipping
-        # This ensures no content is lost from edge tiles
         cols, rows = tiles_config.calculate_grid(output_config.width, output_config.height)
-        natural_width = (cols - 1) * tiles_config.effective_size + expected_size
-        natural_height = (rows - 1) * tiles_config.effective_size + expected_size
+        lon_step = region.width_degrees / cols
+        lat_step = region.height_degrees / rows
 
-        # Convert to TileInfo for blending, resizing tiles if needed
-        tile_infos = []
+        # Each tile's contribution is one grid cell. Use uniform pixel size per cell.
+        cell_w = round(output_config.width / cols)
+        cell_h = round(output_config.height / rows)
+        out_w = cell_w * cols
+        out_h = cell_h * rows
+
+        offsets = tile_offsets or {}
+        assembled = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+
         for result in successful:
+            spec = result.spec
             tile_image = result.generated_image
 
-            # Resize tile to expected size if Gemini returned different dimensions
-            if tile_image.width != expected_size or tile_image.height != expected_size:
+            # Resize the generated tile to match the reference dimensions for this bbox.
+            # Gemini may return a different resolution than the reference we sent it.
+            expected_w, expected_h = self._tile_render_size(spec.bbox)
+            if tile_image.width != expected_w or tile_image.height != expected_h:
                 tile_image = tile_image.resize(
-                    (expected_size, expected_size),
+                    (expected_w, expected_h),
                     Image.Resampling.LANCZOS,
                 )
 
-            tile_infos.append(TileInfo(
-                image=tile_image,
-                col=result.spec.col,
-                row=result.spec.row,
-                x_offset=result.spec.x_offset,
-                y_offset=result.spec.y_offset,
+            # This tile's geographic bbox (includes overlap)
+            tile_geo_w = spec.bbox.east - spec.bbox.west
+            tile_geo_h = spec.bbox.north - spec.bbox.south
+
+            # This tile's unique contribution (its grid cell, no overlap)
+            contrib_west = region.west + spec.col * lon_step
+            contrib_east = region.west + (spec.col + 1) * lon_step
+            contrib_north = region.north - spec.row * lat_step
+            contrib_south = region.north - (spec.row + 1) * lat_step
+
+            # Convert contribution bounds to pixel crop within the tile
+            # (proportional to geographic position within the tile's bbox)
+            crop_left = round((contrib_west - spec.bbox.west) / tile_geo_w * tile_image.width)
+            crop_top = round((spec.bbox.north - contrib_north) / tile_geo_h * tile_image.height)
+            crop_right = round((spec.bbox.east - contrib_east) / tile_geo_w * tile_image.width)
+            crop_bottom = round((contrib_south - spec.bbox.south) / tile_geo_h * tile_image.height)
+
+            cropped = tile_image.crop((
+                crop_left,
+                crop_top,
+                tile_image.width - crop_right,
+                tile_image.height - crop_bottom,
             ))
 
-        # Blend tiles at natural grid size (no content clipping)
-        assembled = self._blending.blend_tiles(
-            tiles=tile_infos,
-            output_size=(natural_width, natural_height),
-            overlap=tiles_config.overlap,
-        )
+            # Resize to uniform contribution size
+            cropped = cropped.resize((cell_w, cell_h), Image.Resampling.LANCZOS)
 
-        # Scale to desired output dimensions if different from natural size
-        if (natural_width, natural_height) != (output_config.width, output_config.height):
+            # Apply per-tile offset adjustment
+            key = f"{spec.col},{spec.row}"
+            offset = offsets.get(key, {})
+            dx = offset.get("dx", 0)
+            dy = offset.get("dy", 0)
+
+            paste_x = spec.col * cell_w + dx
+            paste_y = spec.row * cell_h + dy
+
+            assembled.paste(cropped, (paste_x, paste_y))
+
+        # Scale to desired output dimensions if different
+        if (out_w, out_h) != (output_config.width, output_config.height):
             assembled = assembled.resize(
                 (output_config.width, output_config.height),
                 Image.Resampling.LANCZOS,

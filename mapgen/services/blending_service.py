@@ -41,7 +41,14 @@ class BlendingService:
         overlap: int = 256,
     ) -> Image.Image:
         """
-        Blend multiple tiles into a single seamless image.
+        Assemble tiles by cropping each to its unique contribution region.
+
+        Each tile is generated with geographic overlap so Gemini has edge context,
+        but since each tile is independently AI-generated, the overlap regions contain
+        different interpretations of the same area. Instead of alpha-blending (which
+        ghosts/doubles features), we crop each tile to only its unique portion:
+        - Interior tiles: crop overlap/2 from each internal edge
+        - Edge tiles: keep full extent on the map-boundary side
 
         Args:
             tiles: List of TileInfo objects
@@ -49,7 +56,7 @@ class BlendingService:
             overlap: Overlap between adjacent tiles in pixels
 
         Returns:
-            Blended PIL Image
+            Assembled PIL Image
         """
         width, height = output_size
 
@@ -57,55 +64,37 @@ class BlendingService:
         max_col = max(t.col for t in tiles)
         max_row = max(t.row for t in tiles)
 
-        # Create output array
-        output = np.zeros((height, width, 4), dtype=np.float32)
-        weight_sum = np.zeros((height, width), dtype=np.float32)
+        output = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        half = overlap // 2
 
         for tile in tiles:
-            tile_array = np.array(tile.image).astype(np.float32) / 255.0
+            tile_height = tile.image.height
+            tile_width = tile.image.width
 
-            # Determine which edges need feathering (only internal edges)
-            tile_height, tile_width = tile_array.shape[:2]
-            feather_left = tile.col > 0
-            feather_right = tile.col < max_col
-            feather_top = tile.row > 0
-            feather_bottom = tile.row < max_row
+            # Determine crop: trim half the overlap from each internal edge
+            crop_left = half if tile.col > 0 else 0
+            crop_right = half if tile.col < max_col else 0
+            crop_top = half if tile.row > 0 else 0
+            crop_bottom = half if tile.row < max_row else 0
 
-            # Create weight mask with selective edge feathering
-            weight = self._create_weight_mask_selective(
-                tile_width, tile_height, overlap,
-                feather_left, feather_right, feather_top, feather_bottom,
-            )
+            # Crop the tile to its unique region
+            cx1 = crop_left
+            cy1 = crop_top
+            cx2 = tile_width - crop_right
+            cy2 = tile_height - crop_bottom
+            cropped = tile.image.crop((cx1, cy1, cx2, cy2))
 
-            # Calculate position in output
-            y1 = tile.y_offset
-            y2 = min(y1 + tile_height, height)
-            x1 = tile.x_offset
-            x2 = min(x1 + tile_width, width)
+            # Paste at the offset position, shifted by the crop
+            paste_x = tile.x_offset + crop_left
+            paste_y = tile.y_offset + crop_top
 
-            # Calculate which portion of the tile to use
-            ty1 = 0
-            tx1 = 0
-            ty2 = y2 - y1
-            tx2 = x2 - x1
+            # Clamp to output bounds
+            paste_x = max(0, min(paste_x, width))
+            paste_y = max(0, min(paste_y, height))
 
-            # Add weighted tile to output
-            tile_slice = tile_array[ty1:ty2, tx1:tx2]
-            weight_slice = weight[ty1:ty2, tx1:tx2]
+            output.paste(cropped, (paste_x, paste_y))
 
-            for c in range(4):
-                output[y1:y2, x1:x2, c] += tile_slice[:, :, c] * weight_slice
-            weight_sum[y1:y2, x1:x2] += weight_slice
-
-        # Normalize by weight sum
-        mask = weight_sum > 0
-        for c in range(4):
-            output[:, :, c][mask] /= weight_sum[mask]
-
-        # Convert back to uint8
-        output = (output * 255).clip(0, 255).astype(np.uint8)
-
-        return Image.fromarray(output, mode="RGBA")
+        return output
 
     def _create_weight_mask(
         self,

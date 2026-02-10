@@ -26,9 +26,37 @@ def get_projects_dir() -> Path:
     return Path.cwd() / "projects"
 
 
+def find_project_dir(name: str) -> Optional[Path]:
+    """Find a project directory by name (checks directory name first, then YAML name)."""
+    projects_dir = get_projects_dir()
+
+    # First try direct match by directory name
+    direct_path = projects_dir / name
+    if (direct_path / "project.yaml").exists():
+        return direct_path
+
+    # Fall back to scanning for matching YAML name
+    if projects_dir.exists():
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            yaml_path = project_dir / "project.yaml"
+            if yaml_path.exists():
+                try:
+                    project = Project.from_yaml(yaml_path)
+                    if project.name == name:
+                        return project_dir
+                except Exception:
+                    continue
+    return None
+
+
 def get_project_path(name: str) -> Path:
     """Get the path to a project's YAML file."""
-    return get_projects_dir() / name / "project.yaml"
+    project_dir = find_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+    return project_dir / "project.yaml"
 
 
 def load_project(name: str) -> Project:
@@ -38,20 +66,20 @@ def load_project(name: str) -> Project:
         HTTPException: If project not found
     """
     project_path = get_project_path(name)
-    if not project_path.exists():
-        raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     return Project.from_yaml(project_path)
 
 
 def get_project_cache_dir(project_name: str) -> Path:
     """Get the cache directory for a project."""
     config = get_config()
-    return config.cache_dir / "projects" / project_name
+    project_dir = find_project_dir(project_name)
+    dir_name = project_dir.name if project_dir else project_name
+    return config.cache_dir / "projects" / dir_name
 
 
 def check_has_generated_tiles(project_name: str) -> bool:
     """Check if a project has any generated tiles."""
-    cache_dir = get_project_cache_dir(project_name) / "generation" / "generated"
+    cache_dir = get_project_cache_dir(project_name) / "generated"
     if not cache_dir.exists():
         return False
     return any(cache_dir.glob("tile_*.png"))
@@ -117,13 +145,18 @@ async def create_project(request: ProjectCreate):
         )
 
     # Create project with provided settings or defaults
-    project = Project(
-        name=request.name,
-        region=request.region,
-        output=request.output or None,
-        style=request.style or None,
-        tiles=request.tiles or None,
-    )
+    project_kwargs: dict = {
+        "name": request.name,
+        "region": request.region,
+    }
+    if request.output is not None:
+        project_kwargs["output"] = request.output
+    if request.style is not None:
+        project_kwargs["style"] = request.style
+    if request.tiles is not None:
+        project_kwargs["tiles"] = request.tiles
+
+    project = Project(**project_kwargs)
     project.project_dir = project_dir
 
     # Create directories

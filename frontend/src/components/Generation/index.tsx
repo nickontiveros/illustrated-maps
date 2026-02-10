@@ -4,7 +4,6 @@ import {
   useStartGeneration,
   useCancelGeneration,
 } from '@/hooks/useTiles';
-import { useGenerationWebSocket } from '@/hooks/useWebSocket';
 import { useAppStore } from '@/stores/appStore';
 import type { GenerationProgress } from '@/types';
 
@@ -13,50 +12,57 @@ interface GenerationProps {
 }
 
 function Generation({ projectName }: GenerationProps) {
-  const { data: statusData, refetch } = useGenerationStatus(projectName);
+  const { data: statusData } = useGenerationStatus(projectName);
   const startGeneration = useStartGeneration(projectName);
   const cancelGeneration = useCancelGeneration(projectName);
-  const { activeTaskId, setActiveTaskId } = useAppStore();
+  const { activeGenerations, setActiveGeneration } = useAppStore();
 
   const [showModal, setShowModal] = useState(false);
-  const [progress, setProgress] = useState<GenerationProgress | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
-  // WebSocket for real-time updates
-  const { isConnected, progress: wsProgress } = useGenerationWebSocket(activeTaskId, {
-    onProgress: (p) => setProgress(p),
-    onDone: () => {
-      setActiveTaskId(null);
-      refetch();
-    },
-  });
+  const activeGen = activeGenerations[projectName];
+  const currentProgress: GenerationProgress | null =
+    activeGen?.progress || statusData || null;
 
-  // Use WebSocket progress if available, otherwise fall back to polled status
-  const currentProgress = wsProgress || progress || statusData;
+  const isRunning = currentProgress?.status === 'running';
+  const isFailed = currentProgress?.status === 'failed';
+  const progressPercent = currentProgress
+    ? Math.round((currentProgress.completed_tiles / currentProgress.total_tiles) * 100)
+    : 0;
 
   const handleStart = async () => {
+    setStartError(null);
     try {
       const result = await startGeneration.mutateAsync({ skip_existing: true });
-      setActiveTaskId(result.task_id);
-      setShowModal(true);
-    } catch (error) {
-      console.error('Failed to start generation:', error);
+      setActiveGeneration(projectName, {
+        taskId: result.task_id,
+        projectName,
+        progress: null,
+      });
+    } catch (error: any) {
+      const message = error?.data?.detail || error?.message || 'Failed to start generation';
+      setStartError(message);
     }
   };
 
   const handleCancel = async () => {
     try {
       await cancelGeneration.mutateAsync();
-      setActiveTaskId(null);
+      setActiveGeneration(projectName, null);
     } catch (error) {
       console.error('Failed to cancel generation:', error);
     }
   };
 
-  const isRunning = currentProgress?.status === 'running';
-  const isCompleted = currentProgress?.status === 'completed';
-  const progressPercent = currentProgress
-    ? Math.round((currentProgress.completed_tiles / currentProgress.total_tiles) * 100)
-    : 0;
+  // ESC key to close modal
+  useEffect(() => {
+    if (!showModal) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowModal(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [showModal]);
 
   return (
     <>
@@ -89,21 +95,45 @@ function Generation({ projectName }: GenerationProps) {
             </button>
           </>
         ) : (
-          <button
-            onClick={handleStart}
-            disabled={startGeneration.isPending}
-            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {startGeneration.isPending ? 'Starting...' : 'Generate'}
-          </button>
+          <div className="flex items-center gap-3">
+            {isFailed && currentProgress?.error && (
+              <span className="text-sm text-red-600 max-w-xs truncate" title={currentProgress.error}>
+                Failed: {currentProgress.error}
+              </span>
+            )}
+            <button
+              onClick={handleStart}
+              disabled={startGeneration.isPending}
+              className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {startGeneration.isPending
+                ? 'Starting...'
+                : isFailed
+                ? 'Retry'
+                : 'Generate'}
+            </button>
+          </div>
         )}
       </div>
+
+      {startError && (
+        <div className="fixed top-4 right-4 bg-red-50 text-red-700 text-sm p-4 rounded-lg shadow-xl border border-red-200 max-w-md" style={{ zIndex: 10000 }}>
+          <div className="flex items-start gap-2">
+            <div className="flex-1">{startError}</div>
+            <button
+              onClick={() => setStartError(null)}
+              className="text-red-400 hover:text-red-600 font-bold flex-shrink-0"
+            >
+              x
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Progress Modal */}
       {showModal && (
         <GenerationModal
           progress={currentProgress}
-          isConnected={isConnected}
           onClose={() => setShowModal(false)}
           onCancel={handleCancel}
           isCancelling={cancelGeneration.isPending}
@@ -115,13 +145,12 @@ function Generation({ projectName }: GenerationProps) {
 
 interface GenerationModalProps {
   progress: GenerationProgress | null;
-  isConnected: boolean;
   onClose: () => void;
   onCancel: () => void;
   isCancelling: boolean;
 }
 
-function GenerationModal({ progress, isConnected, onClose, onCancel, isCancelling }: GenerationModalProps) {
+function GenerationModal({ progress, onClose, onCancel, isCancelling }: GenerationModalProps) {
   if (!progress) {
     return null;
   }
@@ -137,16 +166,17 @@ function GenerationModal({ progress, isConnected, onClose, onCancel, isCancellin
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={(e) => {
+        // Close on overlay click (not modal content click)
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-semibold">Generation Progress</h2>
           <div className="flex items-center gap-2">
-            {isConnected && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
-                Live
-              </span>
-            )}
             <span
               className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
                 progress.status === 'running'

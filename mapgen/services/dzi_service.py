@@ -125,8 +125,8 @@ class DZIService:
         # Try to use pyvips for large images (memory efficient)
         try:
             return self._generate_with_pyvips(image_path, output_dir, progress_callback)
-        except ImportError:
-            # Fall back to PIL
+        except (ImportError, OSError):
+            # Fall back to PIL (OSError when libvips native library is missing)
             return self._generate_with_pil(image_path, output_dir, progress_callback)
 
     def _generate_with_pyvips(

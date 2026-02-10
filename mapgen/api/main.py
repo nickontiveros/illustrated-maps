@@ -75,6 +75,33 @@ async def get_api_config():
     }
 
 
+@app.get("/api/tasks/active")
+async def get_active_tasks():
+    """Get all active (running) tasks across all projects."""
+    active = []
+    for task in task_manager._tasks.values():
+        from .schemas import GenerationStatus
+        if task.status == GenerationStatus.RUNNING:
+            entry = {
+                "task_id": task.task_id,
+                "project_name": task.project_name,
+                "task_type": task.task_type,
+                "status": task.status.value,
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+            }
+            if task.progress:
+                entry["progress"] = {
+                    "total_tiles": task.progress.total_tiles,
+                    "completed_tiles": task.progress.completed_tiles,
+                    "failed_tiles": task.progress.failed_tiles,
+                    "elapsed_seconds": task.progress.elapsed_time,
+                    "estimated_remaining_seconds": task.progress.estimated_remaining
+                    if task.progress.completed_tiles > 0 else None,
+                }
+            active.append(entry)
+    return active
+
+
 def mount_static_files(app: FastAPI, projects_dir: Optional[Path] = None):
     """Mount static file directories for serving images.
 

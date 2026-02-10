@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+import typing
 from typing import Any, Callable, Optional
 
 from ..models.project import Project
@@ -49,7 +50,7 @@ class TaskManager:
         self,
         project_name: str,
         task_type: str,
-        coro: asyncio.coroutine,
+        coro: typing.Coroutine,
     ) -> TaskInfo:
         """Create and start a new background task.
 

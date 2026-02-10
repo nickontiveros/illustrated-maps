@@ -68,3 +68,54 @@ export function useCancelGeneration(projectName: string) {
     },
   });
 }
+
+export function useTileOffset(projectName: string | undefined, col: number, row: number) {
+  return useQuery({
+    queryKey: ['project', projectName, 'tile', col, row, 'offset'],
+    queryFn: () => api.getTileOffset(projectName!, col, row),
+    enabled: !!projectName,
+  });
+}
+
+export function useSetTileOffset(projectName: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ col, row, dx, dy }: { col: number; row: number; dx: number; dy: number }) =>
+      api.setTileOffset(projectName, col, row, dx, dy),
+    onSuccess: (_, { col, row }) => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectName, 'tile', col, row, 'offset'] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectName, 'tiles'] });
+    },
+  });
+}
+
+export function useStyleReference(projectName: string | undefined) {
+  return useQuery({
+    queryKey: ['project', projectName, 'style-reference'],
+    queryFn: () => api.hasStyleReference(projectName!),
+    enabled: !!projectName,
+  });
+}
+
+export function useUploadStyleReference(projectName: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (file: File) => api.uploadStyleReference(projectName, file),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectName, 'style-reference'] });
+    },
+  });
+}
+
+export function useDeleteStyleReference(projectName: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => api.deleteStyleReference(projectName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectName, 'style-reference'] });
+    },
+  });
+}

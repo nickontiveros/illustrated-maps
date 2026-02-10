@@ -24,36 +24,64 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAssembling, setIsAssembling] = useState(false);
+  const [needsAssembly, setNeedsAssembly] = useState(false);
 
   // Fetch DZI info
-  useEffect(() => {
-    const fetchInfo = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
+  const fetchInfo = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setNeedsAssembly(false);
 
-        const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/dzi/info`);
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/dzi/info`);
 
-        if (!response.ok) {
-          if (response.status === 404) {
-            setError('No assembled image found. Generate tiles first.');
-          } else {
-            throw new Error(`Failed to fetch DZI info: ${response.statusText}`);
-          }
-          return;
+      if (!response.ok) {
+        if (response.status === 404) {
+          setNeedsAssembly(true);
+          setError(null);
+        } else {
+          throw new Error(`Failed to fetch DZI info: ${response.statusText}`);
         }
-
-        const info = await response.json();
-        setDziInfo(info);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load image info');
-      } finally {
-        setIsLoading(false);
+        return;
       }
-    };
 
+      const info = await response.json();
+      setDziInfo(info);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load image info');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchInfo();
   }, [projectName]);
+
+  const handleAssemble = async () => {
+    try {
+      setIsAssembling(true);
+      setError(null);
+
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectName)}/assemble`,
+        { method: 'POST' }
+      );
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.detail || `Assembly failed: ${response.statusText}`);
+      }
+
+      // Refresh info after assembly
+      await fetchInfo();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to assemble tiles');
+    } finally {
+      setIsAssembling(false);
+    }
+  };
 
   // Initialize OpenSeadragon viewer
   useEffect(() => {
@@ -130,6 +158,25 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
     );
   }
 
+  if (needsAssembly) {
+    return (
+      <div className={`flex flex-col items-center justify-center bg-slate-100 ${className}`}>
+        <div className="text-center">
+          <div className="text-slate-500 mb-4">
+            No assembled image yet. Assemble generated tiles to view the full map.
+          </div>
+          <button
+            onClick={handleAssemble}
+            disabled={isAssembling}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isAssembling ? 'Assembling...' : 'Assemble Tiles'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className={`flex flex-col items-center justify-center bg-slate-100 ${className}`}>
@@ -162,6 +209,39 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
     );
   }
 
+  const handleReassemble = async () => {
+    try {
+      setIsAssembling(true);
+      setError(null);
+
+      // Re-assemble tiles
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectName)}/assemble`,
+        { method: 'POST' }
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.detail || `Assembly failed: ${response.statusText}`);
+      }
+
+      // Regenerate DZI from the new assembled image
+      const dziResponse = await fetch(
+        `/api/projects/${encodeURIComponent(projectName)}/dzi/generate?force=true`,
+        { method: 'POST' }
+      );
+      if (!dziResponse.ok) {
+        throw new Error(`Failed to regenerate DZI: ${dziResponse.statusText}`);
+      }
+
+      // Refresh the viewer
+      await fetchInfo();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to re-assemble');
+    } finally {
+      setIsAssembling(false);
+    }
+  };
+
   return (
     <div className={`relative ${className}`}>
       <div ref={containerRef} className="w-full h-full" />
@@ -172,6 +252,13 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
         <div className="text-slate-500">
           {dziInfo.width} × {dziInfo.height}px
         </div>
+        <button
+          onClick={handleReassemble}
+          disabled={isAssembling}
+          className="mt-2 px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          {isAssembling ? 'Re-assembling...' : 'Re-assemble'}
+        </button>
       </div>
     </div>
   );

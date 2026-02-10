@@ -64,6 +64,15 @@ export interface TileSpec {
   has_generated: boolean;
   generation_time: number | null;
   error: string | null;
+  offset_dx: number;
+  offset_dy: number;
+}
+
+export interface TileOffset {
+  col: number;
+  row: number;
+  dx: number;
+  dy: number;
 }
 
 export interface TileGrid {
@@ -167,6 +176,22 @@ export interface WSDoneMessage {
 }
 
 export type WSMessage = WSProgressMessage | WSTileCompleteMessage | WSErrorMessage | WSDoneMessage;
+
+// Active task types
+export interface ActiveTaskInfo {
+  task_id: string;
+  project_name: string;
+  task_type: string;
+  status: GenerationStatus;
+  created_at: string | null;
+  progress?: {
+    total_tiles: number;
+    completed_tiles: number;
+    failed_tiles: number;
+    elapsed_seconds: number;
+    estimated_remaining_seconds: number | null;
+  };
+}
 
 // API response types
 export interface SuccessResponse {

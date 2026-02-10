@@ -289,6 +289,79 @@ export const api = {
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
 
+  // Tile Offsets
+  async getTileOffset(projectName: string, col: number, row: number) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}/offset`
+    );
+    return handleResponse<import('@/types').TileOffset>(response);
+  },
+
+  async setTileOffset(projectName: string, col: number, row: number, dx: number, dy: number) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}/offset`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dx, dy }),
+      }
+    );
+    return handleResponse<import('@/types').TileOffset>(response);
+  },
+
+  async getAllTileOffsets(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/offsets`
+    );
+    return handleResponse<{ project_name: string; offsets: import('@/types').TileOffset[] }>(response);
+  },
+
+  // Style Reference
+  async uploadStyleReference(projectName: string, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`,
+      { method: 'POST', body: formData }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  getStyleReferenceUrl(projectName: string) {
+    return `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`;
+  },
+
+  async deleteStyleReference(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`,
+      { method: 'DELETE' }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  async hasStyleReference(projectName: string): Promise<boolean> {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`,
+      { method: 'HEAD' }
+    );
+    return response.ok;
+  },
+
+  // Assembly
+  async assembleTiles(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/assemble`,
+      { method: 'POST' }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  // Active Tasks
+  async getActiveTasks() {
+    const response = await fetch(`${API_BASE}/tasks/active`);
+    return handleResponse<import('@/types').ActiveTaskInfo[]>(response);
+  },
+
   // DZI (Deep Zoom Images)
   async getDZIInfo(projectName: string) {
     const response = await fetch(

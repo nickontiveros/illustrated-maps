@@ -129,6 +129,7 @@ class GeminiService:
         style_prompt: Optional[str] = None,
         terrain_description: Optional[str] = None,
         tile_position: Optional[str] = None,
+        style_reference: Optional[Image.Image] = None,
     ) -> GenerationResult:
         """
         Generate an illustrated map tile from a reference image.
@@ -138,6 +139,7 @@ class GeminiService:
             style_prompt: Custom style prompt (uses default if None)
             terrain_description: Optional terrain description to include
             tile_position: Optional position info (e.g., "top-left corner")
+            style_reference: Optional style reference image for visual consistency
 
         Returns:
             GenerationResult with generated image
@@ -145,7 +147,15 @@ class GeminiService:
         from google.genai import types
 
         # Build prompt
-        prompt = style_prompt or self.STYLE_PROMPTS["base_map"]
+        if style_reference:
+            prompt = (
+                "The first image is a satellite/map reference showing the geography to illustrate. "
+                "The second image is a style reference - match its illustrated style, color palette, "
+                "line quality, and artistic approach exactly. "
+            )
+            prompt += style_prompt or self.STYLE_PROMPTS["base_map"]
+        else:
+            prompt = style_prompt or self.STYLE_PROMPTS["base_map"]
 
         if terrain_description:
             prompt += f"\n\nTerrain characteristics: {terrain_description}"
@@ -159,12 +169,24 @@ class GeminiService:
             reference_image = reference_image.copy()
             reference_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
+        # Resize style reference to same max_size
+        if style_reference:
+            if style_reference.width > max_size or style_reference.height > max_size:
+                style_reference = style_reference.copy()
+                style_reference.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
         start_time = time.time()
+
+        # Build contents list
+        if style_reference:
+            contents = [reference_image, style_reference, prompt]
+        else:
+            contents = [reference_image, prompt]
 
         # Generate with image input using new SDK
         response = self.client.models.generate_content(
             model=self.model,
-            contents=[reference_image, prompt],
+            contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
             ),
