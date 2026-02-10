@@ -1,5 +1,6 @@
 """Project management endpoints."""
 
+import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
@@ -15,8 +16,12 @@ from ..schemas import (
     ProjectDetail,
     ProjectSummary,
     ProjectUpdate,
+    SectionalGenerationStartRequest,
+    SectionalGenerationStartResponse,
     SuccessResponse,
 )
+from ..schemas import GenerationStatus
+from ..tasks import task_manager
 
 router = APIRouter()
 
@@ -269,4 +274,79 @@ async def estimate_project_cost(name: str):
             },
         },
         "total_estimated_cost_usd": total_cost,
+    }
+
+
+@router.post(
+    "/{name}/generate-sectional",
+    response_model=SectionalGenerationStartResponse,
+)
+async def start_sectional_generation(
+    name: str,
+    request: SectionalGenerationStartRequest = SectionalGenerationStartRequest(),
+):
+    """Start sectional generation for a project with sectional_layout configured."""
+    project = load_project(name)
+
+    if project.sectional_layout is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Project does not have a sectional_layout configured",
+        )
+
+    layout = project.sectional_layout
+    total_sections = len(layout.focus_regions) + len(layout.fill_regions)
+
+    # Check for existing active task
+    active = await task_manager.get_active_task(name, "sectional_generation")
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sectional generation already running (task {active.task_id})",
+        )
+
+    async def run_generation():
+        from ...services.sectional_generation_service import SectionalGenerationService
+
+        cache_dir = get_project_cache_dir(name)
+        service = SectionalGenerationService(project, cache_dir=cache_dir)
+
+        results, progress = await asyncio.to_thread(
+            service.generate_all_sections,
+            skip_existing=request.skip_existing,
+            region_filter=request.region_filter,
+        )
+        return results, progress
+
+    task_info = await task_manager.create_task(
+        project_name=name,
+        task_type="sectional_generation",
+        coro=run_generation(),
+    )
+
+    return SectionalGenerationStartResponse(
+        task_id=task_info.task_id,
+        status=GenerationStatus.RUNNING,
+        total_sections=total_sections,
+        websocket_url=f"/ws/tasks/{task_info.task_id}",
+    )
+
+
+@router.get("/{name}/sectional-layout")
+async def get_sectional_layout(name: str):
+    """Get the sectional layout for a project."""
+    project = load_project(name)
+
+    if project.sectional_layout is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project does not have a sectional_layout configured",
+        )
+
+    layout = project.sectional_layout
+    return {
+        "project_name": name,
+        "focus_regions": [r.model_dump(mode="json") for r in layout.focus_regions],
+        "fill_regions": [r.model_dump(mode="json") for r in layout.fill_regions],
+        "has_coordinate_mapping": layout.coordinate_mapping is not None,
     }

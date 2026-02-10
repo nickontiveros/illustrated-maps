@@ -1,7 +1,10 @@
 """Composition service for assembling landmarks and labels onto the map."""
 
+from __future__ import annotations
+
+import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
@@ -10,6 +13,9 @@ from ..models.landmark import Landmark
 from ..models.project import BoundingBox
 from ..utils.geo_utils import gps_to_pixel
 from ..utils.image_utils import apply_drop_shadow, blend_images, create_alpha_mask
+
+if TYPE_CHECKING:
+    from ..services.distortion_service import DistortionService
 
 
 @dataclass
@@ -55,9 +61,18 @@ class CompositionService:
         isometric_matrix: Optional[np.ndarray] = None,
         apply_perspective: bool = True,
         remove_background: bool = True,
+        distortion: Optional[DistortionService] = None,
+        rotation_degrees: float = 0.0,
     ) -> PlacedLandmark:
         """
         Calculate placement position for a landmark.
+
+        Coordinate pipeline:
+        1. GPS -> normalized geographic coordinates
+        2. Apply non-linear distortion (if configured)
+        3. Apply rotation transform (if non-zero)
+        4. Apply perspective transform
+        5. -> final pixel coordinates
 
         Args:
             landmark: Landmark model
@@ -67,6 +82,8 @@ class CompositionService:
             isometric_matrix: Optional transformation matrix
             apply_perspective: Whether to transform coords for perspective map
             remove_background: Whether to remove white/light backgrounds
+            distortion: Optional DistortionService for non-linear mapping
+            rotation_degrees: Map rotation in degrees clockwise from north
 
         Returns:
             PlacedLandmark with calculated position
@@ -86,16 +103,23 @@ class CompositionService:
         else:
             flat_size = base_map_size
 
-        # Convert GPS to flat pixel coordinates
+        # Step 1+2: Convert GPS to flat pixel coordinates (with optional distortion)
         flat_x, flat_y = gps_to_pixel(
             landmark.latitude,
             landmark.longitude,
             bbox,
             flat_size,
             isometric_matrix,
+            distortion=distortion,
         )
 
-        # Now apply perspective transformation if the map has perspective
+        # Step 3: Apply rotation transform (if non-zero)
+        if rotation_degrees != 0 and rotation_degrees % 360 != 0:
+            flat_x, flat_y = self._apply_rotation_to_coords(
+                flat_x, flat_y, flat_size, rotation_degrees
+            )
+
+        # Step 4: Apply perspective transformation if the map has perspective
         if apply_perspective:
             pixel_x, pixel_y = self._apply_perspective_to_coords(
                 flat_x, flat_y, flat_size
@@ -291,6 +315,54 @@ class CompositionService:
         scale = self.convergence + (1.0 - self.convergence) * y_norm
 
         return scale
+
+    def _apply_rotation_to_coords(
+        self,
+        x: float,
+        y: float,
+        image_size: tuple[int, int],
+        degrees: float,
+    ) -> tuple[float, float]:
+        """Transform coordinates to account for map rotation.
+
+        When the map image is rotated by `degrees` clockwise, landmark
+        coordinates need the same rotation applied around the image center.
+
+        Args:
+            x: X coordinate in flat (pre-rotation) image.
+            y: Y coordinate in flat (pre-rotation) image.
+            image_size: (width, height) of the flat image.
+            degrees: Clockwise rotation in degrees.
+
+        Returns:
+            (x, y) in rotated image coordinates.
+        """
+        width, height = image_size
+        cx, cy = width / 2, height / 2
+
+        # PIL rotates counter-clockwise, so negate for clockwise
+        rad = math.radians(-degrees)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        # Translate to origin, rotate, translate back
+        dx = x - cx
+        dy = y - cy
+        new_x = dx * cos_a - dy * sin_a + cx
+        new_y = dx * sin_a + dy * cos_a + cy
+
+        # Account for image expansion after rotation
+        # PIL's rotate(expand=True) increases canvas size
+        abs_cos = abs(math.cos(rad))
+        abs_sin = abs(math.sin(rad))
+        new_w = width * abs_cos + height * abs_sin
+        new_h = width * abs_sin + height * abs_cos
+
+        # Shift coordinates to the expanded canvas center
+        new_x += (new_w - width) / 2
+        new_y += (new_h - height) / 2
+
+        return (new_x, new_y)
 
     def place_logo(
         self,

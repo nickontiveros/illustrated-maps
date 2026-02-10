@@ -180,6 +180,41 @@ class BoundingBox(BaseModel):
         corrected_width = self.width_degrees * lat_correction
         return corrected_width / self.height_degrees
 
+    def expanded_for_rotation(self, degrees: float) -> "BoundingBox":
+        """Compute an expanded bbox that covers the original after rotation.
+
+        When the map is rotated by `degrees`, the corners of the original bbox
+        sweep out a larger area. This returns a bbox that fully encloses the
+        rotated original.
+
+        Args:
+            degrees: Clockwise rotation in degrees from north.
+
+        Returns:
+            Expanded BoundingBox.
+        """
+        if degrees % 360 == 0:
+            return self
+
+        center_lat, center_lon = self.center
+        half_h = self.height_degrees / 2
+        half_w = self.width_degrees / 2
+
+        rad = math.radians(degrees)
+        cos_a = abs(math.cos(rad))
+        sin_a = abs(math.sin(rad))
+
+        # Rotated bounding box half-extents
+        new_half_w = half_w * cos_a + half_h * sin_a
+        new_half_h = half_w * sin_a + half_h * cos_a
+
+        return BoundingBox(
+            north=min(90, center_lat + new_half_h),
+            south=max(-90, center_lat - new_half_h),
+            east=min(180, center_lon + new_half_w),
+            west=max(-180, center_lon - new_half_w),
+        )
+
     def to_tuple(self) -> tuple[float, float, float, float]:
         """Return as (north, south, east, west) tuple for OSMnx."""
         return (self.north, self.south, self.east, self.west)
@@ -213,7 +248,13 @@ class StyleSettings(BaseModel):
     )
     orientation: CardinalDirection = Field(
         default=CardinalDirection.NORTH,
-        description="Which cardinal direction is 'up' on the map",
+        description="Which cardinal direction is 'up' on the map (legacy, prefer orientation_degrees)",
+    )
+    orientation_degrees: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=360.0,
+        description="Arbitrary orientation angle in degrees clockwise from north (overrides orientation)",
     )
     prompt: str = Field(
         default=(
@@ -228,6 +269,13 @@ class StyleSettings(BaseModel):
         default=None,
         description="Optional color palette to enforce (hex colors)",
     )
+
+    @property
+    def effective_rotation_degrees(self) -> float:
+        """Get effective rotation in degrees (orientation_degrees takes precedence)."""
+        if self.orientation_degrees is not None:
+            return self.orientation_degrees
+        return float(self.orientation.rotation_degrees)
 
 
 class TileSettings(BaseModel):
@@ -250,6 +298,61 @@ class TileSettings(BaseModel):
         return (cols, rows)
 
 
+class CoordinateMapping(BaseModel):
+    """Non-linear coordinate mapping using piecewise-linear control points.
+
+    Control points map geographic coordinates to normalized pixel-space (0-1).
+    Points between control points are interpolated linearly.
+    """
+
+    lat_control_points: list[tuple[float, float]] = Field(
+        default_factory=list,
+        description="(geographic_lat, normalized_y 0-1) pairs, sorted by lat",
+    )
+    lon_control_points: list[tuple[float, float]] = Field(
+        default_factory=list,
+        description="(geographic_lon, normalized_x 0-1) pairs, sorted by lon",
+    )
+
+
+class FocusRegion(BaseModel):
+    """A high-detail region (city/metro area) for sectional generation."""
+
+    name: str
+    bbox: BoundingBox
+    detail_level: DetailLevel = DetailLevel.SIMPLIFIED
+    scale_factor: float = Field(
+        default=1.0,
+        description="Pixel space multiplier vs geographic proportion",
+    )
+    landmark_names: list[str] = Field(default_factory=list)
+    prompt_override: Optional[str] = None
+
+
+class FillRegion(BaseModel):
+    """A low-detail region (desert/corridor) connecting focus regions."""
+
+    name: str
+    bbox: BoundingBox
+    detail_level: DetailLevel = DetailLevel.COUNTRY
+    include_highways: bool = True
+    include_rivers: bool = True
+    include_terrain_shading: bool = True
+    use_ai_illustration: bool = Field(
+        default=False,
+        description="Use Gemini for hand-painted feel (slower, costs money)",
+    )
+    prompt_override: Optional[str] = None
+
+
+class SectionalLayout(BaseModel):
+    """Layout configuration for sectional (multi-region) generation."""
+
+    focus_regions: list[FocusRegion] = Field(default_factory=list)
+    fill_regions: list[FillRegion] = Field(default_factory=list)
+    coordinate_mapping: Optional[CoordinateMapping] = None
+
+
 class Project(BaseModel):
     """Main project configuration."""
 
@@ -259,13 +362,22 @@ class Project(BaseModel):
     style: StyleSettings = Field(default_factory=StyleSettings)
     tiles: TileSettings = Field(default_factory=TileSettings)
     landmarks: list[Landmark] = Field(default_factory=list, description="Landmarks to illustrate")
+    sectional_layout: Optional[SectionalLayout] = Field(
+        default=None,
+        description="Sectional layout for large-region generation",
+    )
 
     # Paths (set when loading from file)
     project_dir: Optional[Path] = Field(default=None, exclude=True)
 
     @classmethod
     def from_yaml(cls, path: Path) -> "Project":
-        """Load project from YAML file."""
+        """Load project from YAML file.
+
+        Handles backward-compatible migration:
+        - Old `orientation` cardinal direction is preserved but
+          `orientation_degrees` takes precedence when present.
+        """
         with open(path) as f:
             data = yaml.safe_load(f)
 

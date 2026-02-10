@@ -138,8 +138,8 @@ class GenerationService:
         self._osm_data: Optional[OSMData] = None
         self._osm_tile_cache: dict[tuple[int, int], OSMData] = {}
 
-        # Store orientation for rotation
-        self._orientation = project.style.orientation
+        # Store effective rotation (orientation_degrees takes precedence over cardinal)
+        self._rotation_degrees = project.style.effective_rotation_degrees
 
     @property
     def region_area_km2(self) -> float:
@@ -179,24 +179,36 @@ class GenerationService:
     def _apply_orientation_rotation(self, image: Image.Image) -> Image.Image:
         """Apply rotation based on map orientation setting.
 
-        Rotates the image so the configured cardinal direction is 'up'.
+        Supports arbitrary angles via orientation_degrees. For exact
+        multiples of 90 degrees, uses lossless transpose operations.
 
         Args:
             image: Image to rotate
 
         Returns:
-            Rotated image (or original if orientation is north)
+            Rotated image (or original if rotation is 0)
         """
-        rotation = self._orientation.rotation_degrees
-        if rotation == 0:
+        degrees = self._rotation_degrees
+        if degrees == 0:
             return image
-        elif rotation == 90:
+
+        # Use lossless transpose for exact 90° multiples
+        if degrees == 90:
             return image.transpose(Image.Transpose.ROTATE_90)
-        elif rotation == 180:
+        elif degrees == 180:
             return image.transpose(Image.Transpose.ROTATE_180)
-        elif rotation == 270:
+        elif degrees == 270:
             return image.transpose(Image.Transpose.ROTATE_270)
-        return image
+
+        # Arbitrary angle: use Image.rotate with expand to avoid clipping
+        # Negative because PIL rotates counter-clockwise, we want clockwise
+        rotated = image.rotate(
+            -degrees,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor=(0, 0, 0, 0) if image.mode == "RGBA" else None,
+        )
+        return rotated
 
     def calculate_tile_specs(self) -> list[TileSpec]:
         """
@@ -816,6 +828,93 @@ class GenerationService:
         cache_path = self.cache_dir / "generated" / f"tile_{spec.col}_{spec.row}.png"
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(cache_path)
+
+    def generate_for_subregion(
+        self,
+        sub_bbox: BoundingBox,
+        output_size: tuple[int, int],
+        detail_level: Optional[DetailLevel] = None,
+        style_prompt: Optional[str] = None,
+        style_reference: Optional[Image.Image] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Optional[Image.Image]:
+        """Generate an illustrated map for a specific sub-region at a given output size.
+
+        Reuses the existing tile grid, reference composition, and Gemini pipeline
+        but scoped to a smaller geographic area. Used by sectional generation to
+        generate focus regions (cities) independently.
+
+        Args:
+            sub_bbox: Geographic bounds of the sub-region.
+            output_size: (width, height) in pixels for the output.
+            detail_level: Override detail level for this sub-region.
+            style_prompt: Custom style prompt (uses project default if None).
+            style_reference: Optional style reference image.
+            progress_callback: Optional callback for progress updates.
+
+        Returns:
+            Illustrated image for the sub-region, or None on failure.
+        """
+        sub_detail = detail_level or get_recommended_detail_level(
+            sub_bbox.calculate_area_km2()
+        )
+
+        if progress_callback:
+            progress_callback(f"Fetching satellite imagery for sub-region...")
+
+        satellite_image = self.satellite.fetch_satellite_imagery(
+            bbox=sub_bbox,
+            output_size=output_size,
+        )
+
+        if progress_callback:
+            progress_callback(f"Fetching OSM data ({sub_detail.value} detail)...")
+
+        osm_data = self.osm.fetch_region_data(
+            sub_bbox,
+            detail_level=sub_detail.value,
+        )
+
+        if progress_callback:
+            progress_callback("Building reference composite...")
+
+        perspective = PerspectiveService(
+            angle=self.project.style.perspective_angle,
+            convergence=0.7,
+            vertical_scale=0.4,
+            horizon_margin=0.0,
+        )
+        render = RenderService(perspective_service=perspective)
+
+        reference = render.render_composite_reference(
+            satellite_image=satellite_image,
+            osm_data=osm_data,
+            bbox=sub_bbox,
+            output_size=output_size,
+            osm_opacity=0.5,
+            apply_perspective=False,
+        )
+
+        # Apply orientation rotation
+        reference = self._apply_orientation_rotation(reference)
+
+        prompt = style_prompt or self.project.style.prompt
+
+        if progress_callback:
+            progress_callback("Calling Gemini API for sub-region...")
+
+        try:
+            gen_result = self.gemini.generate_base_tile(
+                reference_image=reference,
+                style_prompt=prompt,
+                tile_position="full region",
+                style_reference=style_reference,
+            )
+            return gen_result.image
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Sub-region generation failed: {e}")
+            return None
 
     def estimate_cost(self) -> dict:
         """Estimate generation costs (without requiring API key)."""

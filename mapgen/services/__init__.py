@@ -13,6 +13,8 @@ from .generation_service import GenerationService
 from .seam_repair_service import SeamRepairService
 from .landmark_service import LandmarkService
 from .outpainting_service import OutpaintingService
+from .distortion_service import DistortionService
+from .sectional_generation_service import SectionalGenerationService
 
 __all__ = [
     "OSMService",
@@ -28,4 +30,6 @@ __all__ = [
     "SeamRepairService",
     "LandmarkService",
     "OutpaintingService",
+    "DistortionService",
+    "SectionalGenerationService",
 ]

@@ -7,13 +7,17 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from ..models.landmark import Landmark
+from ..models.landmark import FeatureType, Landmark
 from ..models.project import (
     BoundingBox,
     CardinalDirection,
+    CoordinateMapping,
     DetailLevel,
+    FillRegion,
+    FocusRegion,
     OutputSettings,
     Project,
+    SectionalLayout,
     StyleSettings,
     TileSettings,
 )
@@ -45,6 +49,7 @@ class ProjectDetail(BaseModel):
     style: StyleSettings
     tiles: TileSettings
     landmarks: list[Landmark]
+    sectional_layout: Optional[SectionalLayout] = None
 
     # Computed fields
     area_km2: float
@@ -67,6 +72,7 @@ class ProjectDetail(BaseModel):
             style=project.style,
             tiles=project.tiles,
             landmarks=project.landmarks,
+            sectional_layout=project.sectional_layout,
             area_km2=area,
             detail_level=project.region.get_recommended_detail_level(),
             grid_cols=cols,
@@ -223,6 +229,10 @@ class LandmarkCreate(BaseModel):
     scale: float = Field(default=1.5, ge=0.5, le=5.0)
     z_index: int = Field(default=0)
     rotation: float = Field(default=0, ge=-180, le=180)
+    feature_type: FeatureType = FeatureType.BUILDING
+    path_coordinates: Optional[list[tuple[float, float]]] = None
+    elevation_meters: Optional[float] = None
+    horizon_feature: bool = False
 
 
 class LandmarkUpdate(BaseModel):
@@ -246,6 +256,10 @@ class LandmarkDetail(BaseModel):
     scale: float
     z_index: int
     rotation: float
+    feature_type: FeatureType = FeatureType.BUILDING
+    path_coordinates: Optional[list[tuple[float, float]]] = None
+    elevation_meters: Optional[float] = None
+    horizon_feature: bool = False
     illustrated_path: Optional[str] = None
     pixel_position: Optional[tuple[int, int]] = None
     has_photo: bool = False
@@ -274,6 +288,10 @@ class LandmarkDetail(BaseModel):
             scale=landmark.scale,
             z_index=landmark.z_index,
             rotation=landmark.rotation,
+            feature_type=landmark.feature_type,
+            path_coordinates=landmark.path_coordinates,
+            elevation_meters=landmark.elevation_meters,
+            horizon_feature=landmark.horizon_feature,
             illustrated_path=landmark.illustrated_path,
             pixel_position=landmark.pixel_position,
             has_photo=has_photo,
@@ -324,6 +342,52 @@ class GenerationStartResponse(BaseModel):
     task_id: str
     status: GenerationStatus
     total_tiles: int
+    websocket_url: str
+
+
+# =============================================================================
+# Sectional Generation Schemas
+# =============================================================================
+
+
+class SectionalGenerationStartRequest(BaseModel):
+    """Request to start sectional generation."""
+
+    skip_existing: bool = Field(default=True, description="Skip sections that already exist")
+    region_filter: Optional[list[str]] = Field(
+        default=None, description="Only generate these specific regions by name"
+    )
+
+
+class SectionProgress(BaseModel):
+    """Progress of a single section in sectional generation."""
+
+    region_name: str
+    region_type: str  # "focus" or "fill"
+    status: GenerationStatus
+    elapsed_seconds: float = 0.0
+    error: Optional[str] = None
+
+
+class SectionalGenerationProgress(BaseModel):
+    """Progress of sectional generation job."""
+
+    status: GenerationStatus
+    total_sections: int
+    completed_sections: int
+    failed_sections: int
+    current_section: Optional[str] = None
+    sections: list[SectionProgress] = []
+    elapsed_seconds: float = 0.0
+    error: Optional[str] = None
+
+
+class SectionalGenerationStartResponse(BaseModel):
+    """Response when starting sectional generation."""
+
+    task_id: str
+    status: GenerationStatus
+    total_sections: int
     websocket_url: str
 
 

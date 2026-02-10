@@ -10,7 +10,7 @@ import numpy as np
 from matplotlib.collections import LineCollection, PatchCollection
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
-from PIL import Image
+from PIL import Image, ImageDraw
 from shapely.geometry import MultiPolygon, Polygon
 
 from ..models.project import BoundingBox, Project
@@ -230,8 +230,16 @@ class RenderService:
                     continue
                 self._render_polygon(ax, geom, facecolor=color, edgecolor="none", alpha=0.7)
 
-    def _render_water(self, ax, water: gpd.GeoDataFrame) -> None:
-        """Render water bodies and waterways."""
+    def _render_water(
+        self, ax, water: gpd.GeoDataFrame, scale_factor: float = 1.0
+    ) -> None:
+        """Render water bodies and waterways.
+
+        Args:
+            ax: Matplotlib axes.
+            water: GeoDataFrame with water features.
+            scale_factor: Multiplier for line widths (increase for regional scale).
+        """
         if len(water) == 0:
             return
 
@@ -246,7 +254,9 @@ class RenderService:
             if geom.geom_type in ["Polygon", "MultiPolygon"]:
                 self._render_polygon(ax, geom, facecolor=color, edgecolor=color, alpha=0.9)
             elif geom.geom_type in ["LineString", "MultiLineString"]:
-                self._render_linestring(ax, geom, color=color, linewidth=2)
+                self._render_linestring(
+                    ax, geom, color=color, linewidth=2 * scale_factor
+                )
 
     def _render_parks(self, ax, parks: gpd.GeoDataFrame) -> None:
         """Render park areas."""
@@ -435,6 +445,178 @@ class RenderService:
             solid_capstyle="round",
             solid_joinstyle="round",
         )
+
+    def render_desert_fill(
+        self,
+        osm_data: OSMData,
+        bbox: BoundingBox,
+        output_size: tuple[int, int],
+        elevation_data: Optional[ElevationData] = None,
+        include_highways: bool = True,
+        include_rivers: bool = True,
+        include_terrain_shading: bool = True,
+        dpi: int = 100,
+    ) -> Image.Image:
+        """Render a desert fill region with highways, rivers, and terrain.
+
+        Produces a stylized desert background suitable for connecting
+        focus regions in a sectional map.
+
+        Args:
+            osm_data: OSM data (typically COUNTRY detail level).
+            bbox: Bounding box.
+            output_size: (width, height) in pixels.
+            elevation_data: Optional elevation data for hillshade.
+            include_highways: Render major highways.
+            include_rivers: Render rivers and water.
+            include_terrain_shading: Apply hillshade terrain texture.
+            dpi: DPI for rendering.
+
+        Returns:
+            PIL Image with rendered desert fill.
+        """
+        width, height = output_size
+        fig_width = width / dpi
+        fig_height = height / dpi
+
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=dpi)
+        ax.set_xlim(bbox.west, bbox.east)
+        ax.set_ylim(bbox.south, bbox.north)
+        ax.set_aspect("equal")
+        ax.axis("off")
+
+        # Desert sand base
+        fig.patch.set_facecolor(self.COLORS["desert"])
+        ax.set_facecolor(self.COLORS["desert"])
+
+        # Terrain shading
+        if include_terrain_shading and elevation_data is not None:
+            self._render_hillshade(ax, elevation_data, bbox)
+
+        # Terrain types (developed vs undeveloped)
+        if osm_data.terrain_types is not None and len(osm_data.terrain_types) > 0:
+            self._render_terrain(ax, osm_data.terrain_types)
+
+        # Rivers and water
+        if include_rivers and osm_data.water is not None and len(osm_data.water) > 0:
+            self._render_water(ax, osm_data.water, scale_factor=5.0)
+
+        # Highways (thick lines for visibility at regional scale)
+        if include_highways and osm_data.roads is not None and len(osm_data.roads) > 0:
+            self._render_highways(ax, osm_data.roads)
+
+        # Convert to PIL
+        buf = BytesIO()
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=dpi,
+            bbox_inches="tight",
+            pad_inches=0,
+            facecolor=fig.get_facecolor(),
+        )
+        buf.seek(0)
+        image = Image.open(buf).convert("RGBA")
+
+        if image.size != output_size:
+            image = image.resize(output_size, Image.Resampling.LANCZOS)
+
+        plt.close(fig)
+        return image
+
+    def render_horizon_mountains(
+        self,
+        image: Image.Image,
+        landmarks: list,
+        horizon_y: int,
+        mountain_height: int = 200,
+    ) -> Image.Image:
+        """Render mountain silhouettes along the horizon line.
+
+        For landmarks with `horizon_feature=True`, draws illustrated
+        mountain silhouettes along the top edge of the perspective view.
+
+        Args:
+            image: Base map image to draw on.
+            landmarks: List of Landmark objects.
+            horizon_y: Y pixel position of the horizon line.
+            mountain_height: Maximum height of mountain silhouettes in pixels.
+
+        Returns:
+            Image with mountain silhouettes composited.
+        """
+        from ..models.landmark import FeatureType
+
+        horizon_landmarks = [
+            lm for lm in landmarks
+            if lm.horizon_feature and lm.feature_type == FeatureType.MOUNTAIN
+        ]
+
+        if not horizon_landmarks:
+            return image
+
+        result = image.copy()
+        draw = ImageDraw.Draw(result)
+
+        width = image.width
+
+        for lm in horizon_landmarks:
+            # Map longitude to x position (simple linear for horizon)
+            # The caller should provide pixel x if distortion is used
+            x_center = width // 2  # Default center; actual placement handled by caller
+
+            # Scale mountain height by elevation if available
+            if lm.elevation_meters:
+                height_scale = min(lm.elevation_meters / 4000.0, 1.0)
+            else:
+                height_scale = 0.5
+
+            peak_height = int(mountain_height * height_scale)
+            base_width = int(peak_height * 3)
+
+            # Draw mountain silhouette (triangle with slight curves)
+            points = [
+                (x_center - base_width // 2, horizon_y),
+                (x_center - base_width // 4, horizon_y - int(peak_height * 0.6)),
+                (x_center, horizon_y - peak_height),
+                (x_center + base_width // 4, horizon_y - int(peak_height * 0.7)),
+                (x_center + base_width // 2, horizon_y),
+            ]
+
+            # Mountain fill (dark blue-grey silhouette)
+            draw.polygon(points, fill=(80, 90, 110, 180))
+
+            # Lighter ridge highlight
+            ridge_points = [
+                (x_center - base_width // 6, horizon_y - int(peak_height * 0.4)),
+                (x_center, horizon_y - peak_height),
+                (x_center + base_width // 6, horizon_y - int(peak_height * 0.5)),
+            ]
+            draw.line(ridge_points, fill=(120, 130, 150, 200), width=2)
+
+        return result
+
+    def _render_highways(self, ax, roads: gpd.GeoDataFrame) -> None:
+        """Render major highways with thick interstate-style lines."""
+        if len(roads) == 0:
+            return
+
+        # Only render major roads at regional scale
+        major = roads[roads.get("road_class", "other") == "major"]
+        if len(major) == 0:
+            major = roads  # Fallback: render all if no classification
+
+        # Thick outline
+        for geom in major.geometry:
+            if geom is None or geom.is_empty:
+                continue
+            self._render_linestring(ax, geom, color="#404040", linewidth=6.0)
+
+        # Road fill
+        for geom in major.geometry:
+            if geom is None or geom.is_empty:
+                continue
+            self._render_linestring(ax, geom, color="#E0D0B0", linewidth=4.0)
 
     def render_tile(
         self,

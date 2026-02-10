@@ -220,6 +220,31 @@ class PerspectiveService:
 
         return (new_x, new_y)
 
+    def get_rotated_output_size(
+        self,
+        input_size: tuple[int, int],
+        rotation_degrees: float,
+    ) -> tuple[int, int]:
+        """Calculate output size after rotation + perspective transform.
+
+        Args:
+            input_size: (width, height) of original image.
+            rotation_degrees: Clockwise rotation applied before perspective.
+
+        Returns:
+            (width, height) of final output after both transforms.
+        """
+        width, height = input_size
+
+        if rotation_degrees % 360 != 0:
+            rad = math.radians(rotation_degrees)
+            abs_cos = abs(math.cos(rad))
+            abs_sin = abs(math.sin(rad))
+            width = int(width * abs_cos + height * abs_sin)
+            height = int(width * abs_sin + height * abs_cos)
+
+        return self.get_output_size((width, height))
+
     def get_output_size(self, input_size: tuple[int, int]) -> tuple[int, int]:
         """
         Calculate output image size after perspective transform.

@@ -1,9 +1,24 @@
 """Landmark model for map features."""
 
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+
+class FeatureType(str, Enum):
+    """Type of geographic/architectural feature for a landmark."""
+
+    BUILDING = "building"
+    MOUNTAIN = "mountain"
+    RIVER = "river"
+    PARK = "park"
+    MONUMENT = "monument"
+    STADIUM = "stadium"
+    CAMPUS = "campus"
+    AIRPORT = "airport"
+    NATURAL = "natural"
 
 
 class Landmark(BaseModel):
@@ -16,6 +31,24 @@ class Landmark(BaseModel):
     # Input files (relative to project directory)
     photo: Optional[str] = Field(default=None, description="Path to landmark photo")
     logo: Optional[str] = Field(default=None, description="Path to logo PNG")
+
+    # Feature metadata
+    feature_type: FeatureType = Field(
+        default=FeatureType.BUILDING,
+        description="Type of geographic/architectural feature",
+    )
+    path_coordinates: Optional[list[tuple[float, float]]] = Field(
+        default=None,
+        description="Coordinate path for linear features like rivers (lat, lon pairs)",
+    )
+    elevation_meters: Optional[float] = Field(
+        default=None,
+        description="Elevation in meters (for mountains/peaks)",
+    )
+    horizon_feature: bool = Field(
+        default=False,
+        description="Render on horizon line as silhouette",
+    )
 
     # Display settings
     scale: float = Field(

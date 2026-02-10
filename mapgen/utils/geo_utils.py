@@ -1,12 +1,17 @@
 """Geographic and coordinate utilities."""
 
+from __future__ import annotations
+
 import math
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from shapely.geometry import Polygon, box
 
 from ..models.project import BoundingBox
+
+if TYPE_CHECKING:
+    from ..services.distortion_service import DistortionService
 
 
 def bbox_to_polygon(bbox: BoundingBox) -> Polygon:
@@ -50,6 +55,7 @@ def gps_to_pixel(
     bbox: BoundingBox,
     image_size: tuple[int, int],
     isometric_matrix: Optional[np.ndarray] = None,
+    distortion: Optional["DistortionService"] = None,
 ) -> tuple[int, int]:
     """
     Convert GPS coordinates to pixel position on map.
@@ -60,10 +66,17 @@ def gps_to_pixel(
         bbox: Map bounding box
         image_size: (width, height) in pixels
         isometric_matrix: Optional transformation matrix for isometric projection
+        distortion: Optional DistortionService for non-linear coordinate mapping.
+                    When provided, uses piecewise-linear interpolation instead of
+                    uniform linear mapping.
 
     Returns:
         (x, y) pixel coordinates
     """
+    # Use distortion service if provided (non-linear mapping)
+    if distortion is not None:
+        return distortion.geo_to_pixel(lat, lon)
+
     width, height = image_size
 
     # Normalize to 0-1 within bbox
