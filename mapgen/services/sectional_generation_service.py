@@ -429,10 +429,10 @@ class SectionalGenerationService:
 
         # Fade left edge
         for i in range(min(margin, w)):
-            mask_array[:, i] = min(mask_array[:, i], 255 * i / margin)
+            mask_array[:, i] = np.minimum(mask_array[:, i], 255 * i / margin)
         # Fade right edge
         for i in range(min(margin, w)):
-            mask_array[:, w - 1 - i] = min(mask_array[:, w - 1 - i], 255 * i / margin)
+            mask_array[:, w - 1 - i] = np.minimum(mask_array[:, w - 1 - i], 255 * i / margin)
         # Fade top edge
         for i in range(min(margin, h)):
             mask_array[i, :] = np.minimum(mask_array[i, :], 255 * i / margin)
