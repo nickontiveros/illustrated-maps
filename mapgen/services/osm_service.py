@@ -352,9 +352,8 @@ class OSMService:
             ]
 
             # Get road network with custom filter
-            custom_filter = (
-                f'["highway"~"{'|'.join(major_highway_types)}"]'
-            )
+            highway_regex = '|'.join(major_highway_types)
+            custom_filter = f'["highway"~"{highway_regex}"]'
 
             G = ox.graph_from_bbox(
                 bbox=bbox.to_osmnx_bbox(),
@@ -397,7 +396,8 @@ class OSMService:
                 "primary_link",
             ]
 
-            custom_filter = f'["highway"~"{'|'.join(primary_highway_types)}"]'
+            highway_regex = '|'.join(primary_highway_types)
+            custom_filter = f'["highway"~"{highway_regex}"]'
 
             G = ox.graph_from_bbox(
                 bbox=bbox.to_osmnx_bbox(),
@@ -427,7 +427,8 @@ class OSMService:
         """
         try:
             motorway_types = ["motorway", "motorway_link"]
-            custom_filter = f'["highway"~"{'|'.join(motorway_types)}"]'
+            highway_regex = '|'.join(motorway_types)
+            custom_filter = f'["highway"~"{highway_regex}"]'
 
             G = ox.graph_from_bbox(
                 bbox=bbox.to_osmnx_bbox(),

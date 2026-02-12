@@ -79,3 +79,12 @@ target-version = ["py310"]
 [tool.ruff]
 line-length = 100
 select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "network: tests that require network access",
+    "gemini: tests that call the real Gemini API",
+    "slow: tests that take more than 10 seconds",
+]
+addopts = "-m 'not network and not gemini and not slow'"
