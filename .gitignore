@@ -39,6 +39,11 @@ projects/*/logos/
 .cache/
 *.cache
 
+# Test / coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+
 # Reference images (examples in root)
 *.jpg
 *.jpeg
