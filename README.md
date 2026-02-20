@@ -7,10 +7,18 @@ Generate poster-size illustrated maps in the style of hand illustrated tourist m
 - **AI-Powered Illustration**: Uses Google Gemini to transform satellite imagery and map data into illustrated style
 - **High Resolution Output**: Generates A1 poster size (7016 x 9933 px @ 300 DPI)
 - **Landmark Integration**: Add custom landmarks with photos that get illustrated to match the map style
+- **Landmark Discovery**: Auto-discover notable landmarks from OpenStreetMap data
 - **Perspective Transform**: Creates an aerial/isometric view with horizon and atmospheric perspective
+- **Typography & Labels**: Automatic road, water, park, and district labels with hand-drawn styling
+- **Color Palettes**: Preset palettes (vintage tourist, modern pop, ink wash) with enforcement and consistency across tiles
+- **Road Styling**: Exaggerated, hand-drawn road rendering with wobble effects and presets
+- **Decorative Borders**: Four border styles (vintage scroll, art deco, modern minimal, ornate victorian) with title, compass, and legend
+- **Atmospheric Perspective**: Depth-based haze, contrast reduction, and fog layers
+- **Terrain Exaggeration**: Adjustable terrain height emphasis for dramatic relief
 - **Layered PSD Export**: Export as layered Photoshop file for post-editing
 - **Tiled Generation**: Handles large maps by generating overlapping tiles and blending seamlessly
 - **Flexible Orientation**: Set any cardinal direction (north, south, east, west) as "up" on the map
+- **Web UI**: Full-stack React frontend for interactive project management and generation
 - **Cache Management**: Clear cached tiles to force regeneration after prompt or setting changes
 
 ## Installation
@@ -122,6 +130,8 @@ Then open http://localhost:5173 in your browser.
 - **Tile Inspector** - Click tiles to view reference/generated images
 - **Seam Repair** - Visual interface for fixing tile boundaries
 - **Landmark Placement** - Drag-and-drop landmark positioning
+- **Landmark Discovery** - Discover and batch-add notable places from OSM
+- **Project Settings** - Edit typography, road style, border, atmosphere, palette, and narrative settings
 - **Deep Zoom Viewer** - Pan and zoom on large assembled images
 
 ## Complete Workflow
@@ -290,9 +300,41 @@ output:
 style:
   perspective_angle: 35.264   # Isometric angle
   orientation: north          # Which direction is "up" (north/south/east/west)
+  palette_preset: vintage_tourist  # Color palette (vintage_tourist, modern_pop, ink_wash)
+  palette_enforcement_strength: 0.5  # How strongly to enforce palette (0.0-1.0)
+  color_consistency_strength: 0.5    # Cross-tile color consistency (0.0-1.0)
+  terrain_exaggeration: 1.0          # Terrain height emphasis (1.0-5.0)
+  typography:
+    enabled: true
+    road_labels: true
+    water_labels: true
+    park_labels: true
+    district_labels: true
+    font_scale: 1.0           # Label size multiplier (0.5-3.0)
+    max_labels: 50
+  road_style:
+    enabled: true
+    preset: vintage_tourist    # Road rendering preset
+    wobble_amount: 1.5         # Hand-drawn wobble (0.0-5.0)
+  atmosphere:
+    enabled: false
+    haze_strength: 0.3         # Distance haze (0.0-1.0)
+    contrast_reduction: 0.15   # Depth contrast reduction (0.0-0.5)
   prompt: |
     Transform this map into a hand illustrated tourist map style.
     Use a hand-painted illustration aesthetic with warm, muted colors...
+
+border:
+  enabled: false
+  style: vintage_scroll        # vintage_scroll, art_deco, modern_minimal, ornate_victorian
+  margin: 200                  # Border width in pixels (50-500)
+  show_compass: true
+  show_legend: true
+
+narrative:
+  auto_discover: false         # Auto-discover landmarks from OSM
+  max_landmarks: 50
+  min_importance_score: 0.3
 
 tiles:
   size: 2048        # Tile size in pixels
@@ -359,8 +401,23 @@ landmarks:
 | `mapgen add-landmark PROJECT` | Add a landmark |
 | `mapgen list-landmarks PROJECT` | List all landmarks |
 | `mapgen remove-landmark PROJECT` | Remove a landmark |
+| `mapgen discover-landmarks PROJECT` | Auto-discover landmarks from OSM data |
 | `mapgen illustrate-landmarks PROJECT` | Illustrate landmark photos |
 | `mapgen compose PROJECT` | Composite landmarks onto map |
+
+### Post-Processing
+
+| Command | Description |
+|---------|-------------|
+| `mapgen add-labels PROJECT` | Add typography labels to a map image |
+| `mapgen add-border PROJECT` | Add a decorative border to a map image |
+
+### Color Palettes
+
+| Command | Description |
+|---------|-------------|
+| `mapgen palette list-presets` | List available color palette presets |
+| `mapgen palette extract IMAGE` | Extract a color palette from an image |
 
 ### Export
 
@@ -372,7 +429,9 @@ landmarks:
 
 | Command | Description |
 |---------|-------------|
+| `mapgen generate PROJECT` | Run complete pipeline with all enhancements |
 | `mapgen generate-full PROJECT` | Run complete pipeline (tiles + landmarks + compose) |
+| `mapgen generate-sectional PROJECT` | Generate large maps in sections |
 
 ## Customization
 
@@ -567,6 +626,32 @@ mapgen init --name "My Neighborhood" \
 # Edit project.yaml: width: 2048, height: 2048
 
 mapgen generate-tiles projects/neighborhood/
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Install test dependencies
+pip install pytest pytest-asyncio httpx
+
+# Run full test suite
+python -m pytest tests/ -v
+
+# Run only unit tests
+python -m pytest tests/unit/ -v
+
+# Run only integration tests
+python -m pytest tests/integration/ -v
+```
+
+The test suite includes 481 tests covering models, services, CLI commands, and API endpoints.
+
+### Type Checking (Frontend)
+
+```bash
+cd frontend && npx tsc --noEmit
 ```
 
 ## License

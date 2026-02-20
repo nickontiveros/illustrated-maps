@@ -6,6 +6,7 @@ import {
   useDeleteLandmark,
   useIllustrateLandmark,
   useIllustrateAllLandmarks,
+  useDiscoverLandmarks,
 } from '@/hooks/useLandmarks';
 import { useAppStore } from '@/stores/appStore';
 import { api } from '@/api/client';
@@ -19,7 +20,9 @@ function Landmarks({ projectName }: LandmarksProps) {
   const { data: landmarks, isLoading } = useLandmarks(projectName);
   const { selectedLandmark, setSelectedLandmark } = useAppStore();
   const illustrateAll = useIllustrateAllLandmarks(projectName);
+  const discoverLandmarks = useDiscoverLandmarks(projectName);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showDiscoverModal, setShowDiscoverModal] = useState(false);
 
   if (isLoading) {
     return (
@@ -69,6 +72,24 @@ function Landmarks({ projectName }: LandmarksProps) {
             </button>
           )}
         </div>
+        <button
+          onClick={() => {
+            discoverLandmarks.mutate(undefined, {
+              onSuccess: () => setShowDiscoverModal(true),
+            });
+          }}
+          disabled={discoverLandmarks.isPending}
+          className="w-full px-3 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+        >
+          {discoverLandmarks.isPending ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+              Discovering...
+            </span>
+          ) : (
+            'Discover Landmarks'
+          )}
+        </button>
       </div>
 
       {/* Landmark list */}
@@ -138,6 +159,15 @@ function Landmarks({ projectName }: LandmarksProps) {
         <AddLandmarkModal
           projectName={projectName}
           onClose={() => setShowAddModal(false)}
+        />
+      )}
+
+      {/* Discover landmarks modal */}
+      {showDiscoverModal && discoverLandmarks.data && (
+        <DiscoverLandmarksModal
+          projectName={projectName}
+          discovered={discoverLandmarks.data.landmarks}
+          onClose={() => setShowDiscoverModal(false)}
         />
       )}
     </div>
@@ -373,6 +403,148 @@ function AddLandmarkModal({ projectName, onClose }: AddLandmarkModalProps) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+interface DiscoverLandmarksModalProps {
+  projectName: string;
+  discovered: LandmarkDetail[];
+  onClose: () => void;
+}
+
+function DiscoverLandmarksModal({ projectName, discovered, onClose }: DiscoverLandmarksModalProps) {
+  const createLandmark = useCreateLandmark(projectName);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(discovered.map((_, i) => i)));
+  const [adding, setAdding] = useState(false);
+
+  const toggleAll = () => {
+    if (selected.size === discovered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(discovered.map((_, i) => i)));
+    }
+  };
+
+  const toggleOne = (idx: number) => {
+    const next = new Set(selected);
+    if (next.has(idx)) {
+      next.delete(idx);
+    } else {
+      next.add(idx);
+    }
+    setSelected(next);
+  };
+
+  const handleAddSelected = async () => {
+    setAdding(true);
+    try {
+      for (const idx of Array.from(selected).sort()) {
+        const lm = discovered[idx];
+        await createLandmark.mutateAsync({
+          name: lm.name,
+          latitude: lm.latitude,
+          longitude: lm.longitude,
+          scale: lm.scale,
+        });
+      }
+      onClose();
+    } catch (error) {
+      console.error('Failed to add landmarks:', error);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  if (discovered.length === 0) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+          <h2 className="text-xl font-semibold mb-4">Discover Landmarks</h2>
+          <p className="text-slate-500">No landmarks discovered in this region.</p>
+          <div className="flex justify-end mt-4">
+            <button onClick={onClose} className="px-4 py-2 text-slate-600 hover:text-slate-800">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-slate-200">
+          <h2 className="text-xl font-semibold">
+            Discovered {discovered.length} Landmarks
+          </h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Select landmarks to add to your project
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 sticky top-0">
+              <tr>
+                <th className="px-4 py-2 text-left">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === discovered.length}
+                    onChange={toggleAll}
+                  />
+                </th>
+                <th className="px-4 py-2 text-left text-slate-600">Name</th>
+                <th className="px-4 py-2 text-left text-slate-600">Scale</th>
+                <th className="px-4 py-2 text-left text-slate-600">Location</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {discovered.map((lm, idx) => (
+                <tr
+                  key={idx}
+                  className={`hover:bg-slate-50 ${selected.has(idx) ? 'bg-blue-50' : ''}`}
+                >
+                  <td className="px-4 py-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(idx)}
+                      onChange={() => toggleOne(idx)}
+                    />
+                  </td>
+                  <td className="px-4 py-2 font-medium text-slate-800">{lm.name}</td>
+                  <td className="px-4 py-2 text-slate-600">{lm.scale.toFixed(1)}x</td>
+                  <td className="px-4 py-2 text-slate-500">
+                    {lm.latitude.toFixed(4)}, {lm.longitude.toFixed(4)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-200 flex justify-between items-center">
+          <span className="text-sm text-slate-500">
+            {selected.size} of {discovered.length} selected
+          </span>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-slate-600 hover:text-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleAddSelected}
+              disabled={selected.size === 0 || adding}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {adding ? 'Adding...' : `Add ${selected.size} Landmarks`}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

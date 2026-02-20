@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { BoundingBox, OutputSettings, StyleSettings, TileSettings } from '@/types';
+import type { BoundingBox, OutputSettings, StyleSettings, TileSettings, BorderSettings, NarrativeSettings } from '@/types';
 
 export function useProjects() {
   return useQuery({
@@ -50,6 +50,10 @@ export function useUpdateProject(name: string) {
       output?: OutputSettings;
       style?: StyleSettings;
       tiles?: TileSettings;
+      title?: string;
+      subtitle?: string;
+      border?: BorderSettings;
+      narrative?: NarrativeSettings;
     }) => api.updateProject(name, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project', name] });

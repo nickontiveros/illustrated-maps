@@ -379,6 +379,7 @@ async def upload_style_reference(name: str, file: UploadFile = File(...)):
     return SuccessResponse(message="Style reference uploaded")
 
 
+@router.head("/{name}/style-reference")
 @router.get("/{name}/style-reference")
 async def get_style_reference(name: str):
     """Get the current style reference image."""

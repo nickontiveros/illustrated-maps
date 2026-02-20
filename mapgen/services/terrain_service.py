@@ -146,6 +146,7 @@ class TerrainService:
         elevation_data: ElevationData,
         azimuth: float = 315,
         altitude: float = 45,
+        vertical_exaggeration: float = 1.0,
     ) -> np.ndarray:
         """
         Compute hillshade from elevation data.
@@ -154,6 +155,9 @@ class TerrainService:
             elevation_data: Elevation data
             azimuth: Light source azimuth in degrees (0=North, 90=East, etc.)
             altitude: Light source altitude in degrees above horizon
+            vertical_exaggeration: Multiply DEM elevations by this factor
+                before gradient computation (1x-5x). Higher values make
+                hills appear steeper and more dramatic.
 
         Returns:
             Hillshade array (0-255)
@@ -166,6 +170,11 @@ class TerrainService:
         valid_mask = dem != elevation_data.nodata_value
         if valid_mask.any():
             dem_filled[~valid_mask] = np.mean(dem[valid_mask])
+
+        # Apply vertical exaggeration before gradient computation
+        if vertical_exaggeration != 1.0:
+            mean_elev = np.mean(dem_filled[valid_mask]) if valid_mask.any() else 0
+            dem_filled = (dem_filled - mean_elev) * vertical_exaggeration + mean_elev
 
         # Calculate gradients
         dx = np.gradient(dem_filled, res_x, axis=1)

@@ -163,6 +163,14 @@ class GeminiService:
         if tile_position:
             prompt += f"\n\nThis is the {tile_position} section of the map."
 
+        # Enhanced road treatment hint
+        if style_reference:
+            prompt += (
+                "\n\nIMPORTANT: Follow the road widths and positions shown in "
+                "the reference image closely. Roads should be clearly visible "
+                "paths with consistent width hierarchy."
+            )
+
         # Resize image if needed (max 2048 for most models)
         max_size = self.MODELS.get(self.model, {}).get("max_size", 2048)
         if reference_image.width > max_size or reference_image.height > max_size:

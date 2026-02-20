@@ -9,6 +9,7 @@ import SeamRepair from './SeamRepair';
 import Landmarks from './Landmarks';
 import Generation from './Generation';
 import DeepZoomViewer from './DeepZoomViewer';
+import ProjectSettings from './ProjectSettings';
 
 function ProjectView() {
   const { name } = useParams<{ name: string }>();
@@ -142,57 +143,6 @@ function ProjectView() {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function ProjectSettings({ project }: { project: import('@/types').ProjectDetail }) {
-  return (
-    <div className="p-4 space-y-6">
-      <section>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Region</h3>
-        <div className="bg-slate-50 rounded-lg p-3 text-sm">
-          <div className="grid grid-cols-2 gap-2">
-            <div>North: {project.region.north.toFixed(4)}°</div>
-            <div>South: {project.region.south.toFixed(4)}°</div>
-            <div>East: {project.region.east.toFixed(4)}°</div>
-            <div>West: {project.region.west.toFixed(4)}°</div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Output</h3>
-        <div className="bg-slate-50 rounded-lg p-3 text-sm space-y-1">
-          <div>Size: {project.output.width}×{project.output.height}px</div>
-          <div>DPI: {project.output.dpi}</div>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Style</h3>
-        <div className="bg-slate-50 rounded-lg p-3 text-sm space-y-1">
-          <div>Orientation: {project.style.orientation}</div>
-          <div>Perspective: {project.style.perspective_angle}°</div>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Tiles</h3>
-        <div className="bg-slate-50 rounded-lg p-3 text-sm space-y-1">
-          <div>Size: {project.tiles.size}px</div>
-          <div>Overlap: {project.tiles.overlap}px</div>
-          <div>Grid: {project.grid_cols}×{project.grid_rows}</div>
-          <div>Total: {project.tile_count} tiles</div>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Detail Level</h3>
-        <div className="bg-slate-50 rounded-lg p-3 text-sm">
-          {project.detail_level}
-        </div>
-      </section>
     </div>
   );
 }

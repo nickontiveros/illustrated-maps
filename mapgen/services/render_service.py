@@ -185,12 +185,25 @@ class RenderService:
         ax,
         elevation_data: ElevationData,
         bbox: BoundingBox,
+        alpha: float = 0.3,
+        vertical_exaggeration: float = 1.0,
     ) -> None:
-        """Render hillshade as background layer."""
+        """Render hillshade as background layer.
+
+        Args:
+            ax: Matplotlib axes.
+            elevation_data: Elevation data for hillshade computation.
+            bbox: Geographic bounding box.
+            alpha: Hillshade layer opacity (0.0-1.0).
+            vertical_exaggeration: DEM vertical exaggeration factor.
+        """
         from .terrain_service import TerrainService
 
         terrain_service = TerrainService()
-        hillshade = terrain_service.compute_hillshade(elevation_data)
+        hillshade = terrain_service.compute_hillshade(
+            elevation_data,
+            vertical_exaggeration=vertical_exaggeration,
+        )
 
         # Create extent for imshow
         extent = [bbox.west, bbox.east, bbox.south, bbox.north]
@@ -200,7 +213,7 @@ class RenderService:
             hillshade,
             extent=extent,
             cmap="gray",
-            alpha=0.3,
+            alpha=alpha,
             origin="upper",
             aspect="auto",
         )

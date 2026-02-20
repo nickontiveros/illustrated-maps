@@ -88,3 +88,70 @@ def small_test_image():
     # White bottom-right quadrant
     arr[16:, 16:] = [255, 255, 255, 255]
     return Image.fromarray(arr, "RGBA")
+
+
+from mapgen.models.typography import TypographySettings
+from mapgen.models.road_style import RoadStyleSettings
+from mapgen.models.border import BorderSettings, BorderStyle
+from mapgen.models.atmosphere import AtmosphereSettings
+from mapgen.models.narrative import NarrativeSettings
+
+
+@pytest.fixture
+def sample_typography_settings():
+    """Typography settings with labels enabled."""
+    return TypographySettings(enabled=True)
+
+
+@pytest.fixture
+def sample_road_style_settings():
+    """Road style settings enabled with defaults."""
+    return RoadStyleSettings(enabled=True)
+
+
+@pytest.fixture
+def sample_border_settings():
+    """Border settings with vintage_scroll style."""
+    return BorderSettings(enabled=True, style=BorderStyle.VINTAGE_SCROLL, margin=100)
+
+
+@pytest.fixture
+def sample_atmosphere_settings():
+    """Atmosphere settings enabled with mild haze."""
+    return AtmosphereSettings(enabled=True, haze_strength=0.3)
+
+
+@pytest.fixture
+def sample_narrative_settings():
+    """Narrative settings for landmark discovery."""
+    return NarrativeSettings(max_landmarks=20)
+
+
+@pytest.fixture
+def large_test_image():
+    """256x256 RGBA image for border/atmosphere tests."""
+    arr = np.zeros((256, 256, 4), dtype=np.uint8)
+    arr[:, :, 0] = np.tile(np.linspace(50, 200, 256, dtype=np.uint8), (256, 1))
+    arr[:, :, 1] = np.tile(np.linspace(100, 180, 256, dtype=np.uint8).reshape(256, 1), (1, 256))
+    arr[:, :, 2] = 150
+    arr[:, :, 3] = 255
+    return Image.fromarray(arr, "RGBA")
+
+
+@pytest.fixture
+def sample_buildings_gdf():
+    """Minimal GeoDataFrame with OSM-like columns for testing discovery."""
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import Point, box
+
+    data = [
+        {"name": "Big Museum", "tourism": "museum", "geometry": box(-73.975, 40.769, -73.974, 40.770)},
+        {"name": "Old Castle", "historic": "castle", "geometry": box(-73.976, 40.770, -73.975, 40.771)},
+        {"name": "City Park", "leisure": "park", "geometry": box(-73.977, 40.771, -73.976, 40.772)},
+        {"name": "Local Cafe", "amenity": "restaurant", "geometry": Point(-73.974, 40.769)},
+        {"name": "Train Station", "amenity": "library", "geometry": Point(-73.973, 40.770)},
+        {"name": None, "tourism": "attraction", "geometry": Point(-73.972, 40.771)},
+    ]
+    df = pd.DataFrame(data)
+    return gpd.GeoDataFrame(df, geometry="geometry")

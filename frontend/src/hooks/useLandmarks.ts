@@ -88,6 +88,18 @@ export function useUploadLandmarkPhoto(projectName: string) {
   });
 }
 
+export function useDiscoverLandmarks(projectName: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data?: { min_importance_score?: number; max_landmarks?: number }) =>
+      api.discoverLandmarks(projectName, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectName, 'landmarks'] });
+    },
+  });
+}
+
 export function useIllustrateAllLandmarks(projectName: string) {
   const queryClient = useQueryClient();
 

@@ -193,6 +193,14 @@ async def update_project(name: str, request: ProjectUpdate):
         project.style = request.style
     if request.tiles is not None:
         project.tiles = request.tiles
+    if request.title is not None:
+        project.title = request.title
+    if request.subtitle is not None:
+        project.subtitle = request.subtitle
+    if request.border is not None:
+        project.border = request.border
+    if request.narrative is not None:
+        project.narrative = request.narrative
 
     # Save updated project
     project.to_yaml(get_project_path(name))

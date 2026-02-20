@@ -55,6 +55,10 @@ export const api = {
     output?: import('@/types').OutputSettings;
     style?: import('@/types').StyleSettings;
     tiles?: import('@/types').TileSettings;
+    title?: string;
+    subtitle?: string;
+    border?: import('@/types').BorderSettings;
+    narrative?: import('@/types').NarrativeSettings;
   }) {
     const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, {
       method: 'PUT',
@@ -279,6 +283,18 @@ export const api = {
       }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  async discoverLandmarks(projectName: string, data?: import('@/types').LandmarkDiscoverRequest) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/discover`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data ?? {}),
+      }
+    );
+    return handleResponse<import('@/types').LandmarkDiscoverResponse>(response);
   },
 
   async illustrateAllLandmarks(projectName: string) {

@@ -67,6 +67,15 @@ def main():
               type=click.Choice(["full", "simplified", "regional", "country", "auto"]),
               default="auto",
               help="OSM detail level (auto selects based on region size)")
+@click.option("--with-labels/--no-labels", default=True, help="Enable/disable typography labels")
+@click.option("--color-consistency/--no-color-consistency", default=True, help="Enable color consistency across tiles")
+@click.option("--border-style",
+              type=click.Choice(["vintage_scroll", "art_deco", "modern_minimal", "ornate_victorian", "none"]),
+              default="none",
+              help="Border style to apply")
+@click.option("--atmosphere/--no-atmosphere", default=False, help="Enable atmospheric perspective")
+@click.option("--terrain-exaggeration", type=float, default=1.0, help="Terrain vertical exaggeration factor")
+@click.option("--auto-discover/--no-auto-discover", default=False, help="Auto-discover landmarks from OSM")
 def generate(
     project_path: str,
     output: Optional[str],
@@ -74,6 +83,12 @@ def generate(
     skip_landmarks: bool,
     preview_only: bool,
     detail_level: str,
+    with_labels: bool,
+    color_consistency: bool,
+    border_style: str,
+    atmosphere: bool,
+    terrain_exaggeration: float,
+    auto_discover: bool,
 ):
     """Generate an illustrated map from a project configuration."""
     project_file = Path(project_path)
@@ -2470,6 +2485,188 @@ def export_psd(
     console.print("\n[bold]Layer structure:[/bold]")
     for name in layers.keys():
         console.print(f"  • {name}")
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.option("--input-image", "-i", type=click.Path(exists=True), required=True, help="Base map image to add labels to")
+@click.option("--output", "-o", type=click.Path(), help="Output path")
+@click.option("--detail-level", "-d",
+              type=click.Choice(["full", "simplified", "regional", "country", "auto"]),
+              default="auto",
+              help="OSM detail level")
+def add_labels(project_path: str, input_image: str, output: Optional[str], detail_level: str):
+    """Add typography labels to an existing map image."""
+    from .services.typography_service import TypographyService
+    from .models.typography import TypographySettings
+
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+    project.ensure_directories()
+
+    console.print(f"[bold]Adding labels to map:[/bold] {project.name}")
+
+    # Load base image
+    base_image = Image.open(input_image)
+
+    # Fetch OSM data for labels
+    actual_detail = detail_level
+    if detail_level == "auto":
+        actual_detail = project.region.get_recommended_detail_level().value
+
+    osm_data = _fetch_osm_data(project, detail_level=actual_detail)
+
+    # Create typography service
+    settings = project.style.typography or TypographySettings()
+    typo_service = TypographyService(settings=settings)
+
+    result = typo_service.extract_and_render(
+        image=base_image,
+        osm_data=osm_data,
+        bbox=project.region,
+    )
+
+    # Save
+    output_path = Path(output) if output else project.output_dir / timestamped_filename(f"{project.name}_labeled")
+    result.save(output_path)
+    console.print(f"[green]Saved labeled map:[/green] {output_path}")
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.option("--input-image", "-i", type=click.Path(exists=True), required=True, help="Map image to add border to")
+@click.option("--output", "-o", type=click.Path(), help="Output path")
+@click.option("--style", "-s",
+              type=click.Choice(["vintage_scroll", "art_deco", "modern_minimal", "ornate_victorian"]),
+              default="vintage_scroll",
+              help="Border style")
+@click.option("--margin", type=int, default=200, help="Border margin in pixels")
+def add_border(project_path: str, input_image: str, output: Optional[str], style: str, margin: int):
+    """Add a decorative border to an existing map image."""
+    from .services.border_service import BorderService
+    from .models.border import BorderSettings, BorderStyle
+
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+
+    console.print(f"[bold]Adding {style} border to map[/bold]")
+
+    base_image = Image.open(input_image)
+
+    border_settings = project.border or BorderSettings(
+        enabled=True,
+        style=BorderStyle(style),
+        margin=margin,
+    )
+
+    border_service = BorderService()
+    result = border_service.render_border(
+        image=base_image,
+        settings=border_settings,
+        title=project.title,
+        subtitle=project.subtitle,
+    )
+
+    output_path = Path(output) if output else project.output_dir / timestamped_filename(f"{project.name}_bordered")
+    result.save(output_path)
+    console.print(f"[green]Saved bordered map:[/green] {output_path}")
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True))
+@click.option("--min-score", type=float, default=0.3, help="Minimum importance score")
+@click.option("--max-landmarks", type=int, default=50, help="Maximum landmarks to discover")
+@click.option("--save/--no-save", default=False, help="Save discovered landmarks to project")
+def discover_landmarks(project_path: str, min_score: float, max_landmarks: int, save: bool):
+    """Discover notable landmarks from OSM data."""
+    from .services.landmark_discovery_service import LandmarkDiscoveryService
+    from .models.narrative import NarrativeSettings
+
+    project_file = Path(project_path)
+    if project_file.is_dir():
+        project_file = project_file / "project.yaml"
+
+    project = Project.from_yaml(project_file)
+
+    console.print(f"[bold]Discovering landmarks for:[/bold] {project.name}")
+
+    # Fetch OSM data
+    osm_data = _fetch_osm_data(project, detail_level="full")
+
+    settings = NarrativeSettings(
+        min_importance_score=min_score,
+        max_landmarks=max_landmarks,
+    )
+    discovery = LandmarkDiscoveryService(settings=settings)
+
+    landmarks = discovery.discover_landmarks(
+        bbox=project.region,
+        buildings_gdf=osm_data.buildings,
+    )
+
+    if not landmarks:
+        console.print("[yellow]No landmarks discovered[/yellow]")
+        return
+
+    table = Table(title=f"Discovered Landmarks ({len(landmarks)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="green")
+    table.add_column("Scale", style="yellow")
+    table.add_column("Location", style="dim")
+
+    for lm in landmarks:
+        table.add_row(
+            lm.name,
+            lm.feature_type.value,
+            f"{lm.scale:.1f}x",
+            f"{lm.latitude:.4f}, {lm.longitude:.4f}",
+        )
+
+    console.print(table)
+
+    if save:
+        project.landmarks.extend(landmarks)
+        project.to_yaml(project_file)
+        console.print(f"[green]Saved {len(landmarks)} landmarks to project[/green]")
+
+
+@main.group()
+def palette():
+    """Color palette management commands."""
+    pass
+
+
+@palette.command()
+def list_presets():
+    """List available color palette presets."""
+    from .services.palette_service import PRESETS
+
+    for name, colors in PRESETS.items():
+        console.print(f"\n[bold]{name}:[/bold]")
+        for color in colors:
+            console.print(f"  {color}")
+
+
+@palette.command()
+@click.argument("image_path", type=click.Path(exists=True))
+@click.option("--n-colors", type=int, default=8, help="Number of colors to extract")
+def extract(image_path: str, n_colors: int):
+    """Extract a color palette from an image."""
+    from .services.palette_service import PaletteService
+
+    image = Image.open(image_path)
+    service = PaletteService()
+    colors = service.extract_palette_from_image(image, n_colors=n_colors)
+
+    console.print(f"[bold]Extracted {len(colors)} colors:[/bold]")
+    for color in colors:
+        console.print(f"  {color}")
 
 
 if __name__ == "__main__":

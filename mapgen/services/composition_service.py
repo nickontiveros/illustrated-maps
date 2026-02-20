@@ -512,9 +512,24 @@ class CompositionService:
         add_shadows: bool = True,
         shadow_offset: tuple[int, int] = (5, 5),
         shadow_blur: int = 10,
+        typography_service=None,
+        osm_data=None,
+        bbox: Optional[BoundingBox] = None,
+        border_service=None,
+        border_settings=None,
+        title: Optional[str] = None,
+        subtitle: Optional[str] = None,
+        distortion=None,
+        rotation_degrees: float = 0.0,
     ) -> Image.Image:
         """
-        Composite all landmarks and logos onto the base map.
+        Composite all landmarks, labels, and borders onto the base map.
+
+        Rendering order (back to front):
+        1. Base map
+        2. Landmarks (sorted by z_index and y-position)
+        3. Typography labels (topmost content layer)
+        4. Decorative border (outermost frame)
 
         Args:
             base_map: Base map image
@@ -522,6 +537,15 @@ class CompositionService:
             add_shadows: Whether to add drop shadows
             shadow_offset: Shadow offset (x, y)
             shadow_blur: Shadow blur radius
+            typography_service: Optional TypographyService for label rendering
+            osm_data: Optional OSMData for label extraction
+            bbox: Optional BoundingBox for coordinate mapping
+            border_service: Optional BorderService for decorative border
+            border_settings: Optional BorderSettings configuration
+            title: Optional map title for cartouche
+            subtitle: Optional map subtitle
+            distortion: Optional DistortionService for non-linear mapping
+            rotation_degrees: Map rotation in degrees
 
         Returns:
             Composited map image
@@ -574,6 +598,26 @@ class CompositionService:
                     logo_pos = placed.logo_position
 
                 result = blend_images(result, logo, logo_pos)
+
+        # Typography: render labels as topmost content layer
+        if typography_service is not None and osm_data is not None and bbox is not None:
+            result = typography_service.extract_and_render(
+                result,
+                osm_data,
+                bbox,
+                distortion=distortion,
+                rotation_degrees=rotation_degrees,
+            )
+
+        # Border: render decorative border as outermost frame
+        if border_service is not None and border_settings is not None and border_settings.enabled:
+            result = border_service.render_border(
+                result,
+                border_settings,
+                title=title,
+                subtitle=subtitle,
+                bbox=bbox,
+            )
 
         return result
 

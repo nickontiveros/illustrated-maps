@@ -12,11 +12,81 @@ export interface OutputSettings {
   dpi: number;
 }
 
+export interface TypographySettings {
+  enabled: boolean;
+  road_labels: boolean;
+  district_labels: boolean;
+  water_labels: boolean;
+  park_labels: boolean;
+  title_text: string | null;
+  subtitle_text: string | null;
+  font_scale: number;
+  halo_width: number;
+  max_labels: number;
+  min_road_length_px: number;
+}
+
+export interface RoadStyleSettings {
+  enabled: boolean;
+  motorway_exaggeration: number;
+  primary_exaggeration: number;
+  secondary_exaggeration: number;
+  residential_exaggeration: number;
+  motorway_color: string | null;
+  primary_color: string | null;
+  secondary_color: string | null;
+  residential_color: string | null;
+  outline_color: string | null;
+  wobble_amount: number;
+  wobble_frequency: number;
+  overlay_on_output: boolean;
+  overlay_opacity: number;
+  reference_opacity: number;
+  preset: string | null;
+}
+
+export interface AtmosphereSettings {
+  enabled: boolean;
+  haze_color: string;
+  haze_strength: number;
+  contrast_reduction: number;
+  saturation_reduction: number;
+  gradient_curve: number;
+}
+
+export interface BorderSettings {
+  enabled: boolean;
+  style: 'vintage_scroll' | 'art_deco' | 'modern_minimal' | 'ornate_victorian';
+  margin: number;
+  show_compass: boolean;
+  show_legend: boolean;
+  show_scale_bar: boolean;
+  border_color: string | null;
+  background_color: string | null;
+  ornament_opacity: number;
+}
+
+export interface NarrativeSettings {
+  auto_discover: boolean;
+  max_landmarks: number;
+  show_activities: boolean;
+  max_activity_markers: number;
+  min_importance_score: number;
+}
+
 export interface StyleSettings {
   perspective_angle: number;
   orientation: 'north' | 'south' | 'east' | 'west';
+  orientation_degrees: number | null;
   prompt: string;
   color_palette: string[] | null;
+  palette_preset: string | null;
+  palette_enforcement_strength: number;
+  color_consistency_strength: number;
+  typography: TypographySettings | null;
+  road_style: RoadStyleSettings | null;
+  atmosphere: AtmosphereSettings | null;
+  terrain_exaggeration: number;
 }
 
 export interface TileSettings {
@@ -47,6 +117,20 @@ export interface ProjectDetail {
   grid_rows: number;
   tile_count: number;
   estimated_cost: number | null;
+  title: string | null;
+  subtitle: string | null;
+  border: BorderSettings | null;
+  narrative: NarrativeSettings | null;
+}
+
+export interface LandmarkDiscoverRequest {
+  min_importance_score?: number;
+  max_landmarks?: number;
+}
+
+export interface LandmarkDiscoverResponse {
+  discovered: number;
+  landmarks: LandmarkDetail[];
 }
 
 // Tile types

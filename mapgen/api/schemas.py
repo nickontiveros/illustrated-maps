@@ -7,7 +7,9 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from ..models.border import BorderSettings
 from ..models.landmark import FeatureType, Landmark
+from ..models.narrative import NarrativeSettings
 from ..models.project import (
     BoundingBox,
     CardinalDirection,
@@ -59,6 +61,11 @@ class ProjectDetail(BaseModel):
     tile_count: int
     estimated_cost: Optional[float] = None
 
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    border: Optional[BorderSettings] = None
+    narrative: Optional[NarrativeSettings] = None
+
     @classmethod
     def from_project(cls, project: Project) -> "ProjectDetail":
         """Create from a Project model."""
@@ -78,6 +85,10 @@ class ProjectDetail(BaseModel):
             grid_cols=cols,
             grid_rows=rows,
             tile_count=cols * rows,
+            title=project.title,
+            subtitle=project.subtitle,
+            border=project.border,
+            narrative=project.narrative,
         )
 
 
@@ -89,6 +100,8 @@ class ProjectCreate(BaseModel):
     output: Optional[OutputSettings] = None
     style: Optional[StyleSettings] = None
     tiles: Optional[TileSettings] = None
+    title: Optional[str] = Field(None, max_length=200)
+    subtitle: Optional[str] = Field(None, max_length=200)
 
 
 class ProjectUpdate(BaseModel):
@@ -97,6 +110,10 @@ class ProjectUpdate(BaseModel):
     output: Optional[OutputSettings] = None
     style: Optional[StyleSettings] = None
     tiles: Optional[TileSettings] = None
+    title: Optional[str] = Field(None, max_length=200)
+    subtitle: Optional[str] = Field(None, max_length=200)
+    border: Optional[BorderSettings] = None
+    narrative: Optional[NarrativeSettings] = None
 
 
 # =============================================================================
@@ -297,6 +314,18 @@ class LandmarkDetail(BaseModel):
             has_photo=has_photo,
             has_illustration=has_illustration,
         )
+
+
+class LandmarkDiscoverRequest(BaseModel):
+    """Request to discover landmarks from OSM."""
+    min_importance_score: float = Field(default=0.3, ge=0.0, le=1.0)
+    max_landmarks: int = Field(default=50, ge=1, le=200)
+
+
+class LandmarkDiscoverResponse(BaseModel):
+    """Response from landmark discovery."""
+    discovered: int
+    landmarks: list[LandmarkDetail]
 
 
 # =============================================================================

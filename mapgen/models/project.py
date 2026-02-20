@@ -8,7 +8,12 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field
 
+from .atmosphere import AtmosphereSettings
+from .border import BorderSettings
 from .landmark import Landmark
+from .narrative import NarrativeSettings
+from .road_style import RoadStyleSettings
+from .typography import TypographySettings
 
 
 class CardinalDirection(str, Enum):
@@ -269,6 +274,40 @@ class StyleSettings(BaseModel):
         default=None,
         description="Optional color palette to enforce (hex colors)",
     )
+    palette_preset: Optional[str] = Field(
+        default=None,
+        description="Named palette preset: vintage_tourist, modern_pop, ink_wash",
+    )
+    palette_enforcement_strength: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Strength of post-generation palette clamping (0=off)",
+    )
+    color_consistency_strength: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Cross-tile color consistency strength (0=off, 1=full)",
+    )
+    typography: Optional[TypographySettings] = Field(
+        default=None,
+        description="Typography and labeling settings",
+    )
+    road_style: Optional[RoadStyleSettings] = Field(
+        default=None,
+        description="Enhanced road styling settings",
+    )
+    atmosphere: Optional[AtmosphereSettings] = Field(
+        default=None,
+        description="Atmospheric perspective settings",
+    )
+    terrain_exaggeration: float = Field(
+        default=1.0,
+        ge=1.0,
+        le=5.0,
+        description="DEM vertical exaggeration factor for hillshade",
+    )
 
     @property
     def effective_rotation_degrees(self) -> float:
@@ -357,11 +396,21 @@ class Project(BaseModel):
     """Main project configuration."""
 
     name: str = Field(..., min_length=1, description="Project name")
+    title: Optional[str] = Field(default=None, description="Map title for cartouche")
+    subtitle: Optional[str] = Field(default=None, description="Map subtitle")
     region: BoundingBox
     output: OutputSettings = Field(default_factory=OutputSettings)
     style: StyleSettings = Field(default_factory=StyleSettings)
     tiles: TileSettings = Field(default_factory=TileSettings)
     landmarks: list[Landmark] = Field(default_factory=list, description="Landmarks to illustrate")
+    border: Optional[BorderSettings] = Field(
+        default=None,
+        description="Decorative border settings",
+    )
+    narrative: Optional[NarrativeSettings] = Field(
+        default=None,
+        description="Landmark discovery and narrative settings",
+    )
     sectional_layout: Optional[SectionalLayout] = Field(
         default=None,
         description="Sectional layout for large-region generation",

@@ -15,6 +15,8 @@ from ...services.landmark_service import LandmarkService
 from ..schemas import (
     LandmarkCreate,
     LandmarkDetail,
+    LandmarkDiscoverRequest,
+    LandmarkDiscoverResponse,
     LandmarkUpdate,
     SuccessResponse,
 )
@@ -144,6 +146,43 @@ async def delete_landmark(name: str, landmark_name: str):
     save_project(name, project)
 
     return SuccessResponse(message=f"Landmark '{landmark_name}' deleted")
+
+
+@router.post("/{name}/landmarks/discover", response_model=LandmarkDiscoverResponse)
+async def discover_landmarks(name: str, request: LandmarkDiscoverRequest):
+    """Discover notable landmarks from OSM data within the project region."""
+    from ...services.landmark_discovery_service import LandmarkDiscoveryService
+    from ...services.osm_service import OSMService
+    from ...models.narrative import NarrativeSettings
+
+    project = load_project(name)
+    cache_dir = get_project_cache_dir(name)
+
+    # Fetch OSM data
+    osm_service = OSMService(cache_dir=str(cache_dir / "osm"))
+    osm_data = osm_service.fetch_region_data(project.region, detail_level="full")
+
+    settings = NarrativeSettings(
+        min_importance_score=request.min_importance_score,
+        max_landmarks=request.max_landmarks,
+    )
+    discovery = LandmarkDiscoveryService(settings=settings)
+
+    landmarks = discovery.discover_landmarks(
+        bbox=project.region,
+        buildings_gdf=osm_data.buildings,
+    )
+
+    # Convert to LandmarkDetail responses
+    landmark_details = [
+        LandmarkDetail.from_landmark(lm, project.project_dir)
+        for lm in landmarks
+    ]
+
+    return LandmarkDiscoverResponse(
+        discovered=len(landmarks),
+        landmarks=landmark_details,
+    )
 
 
 @router.get("/{name}/landmarks/{landmark_name}/photo")

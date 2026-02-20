@@ -17,10 +17,12 @@ from PIL import Image
 
 from ..models.project import BoundingBox, CardinalDirection, DetailLevel, Project, get_recommended_detail_level
 from .blending_service import BlendingService, TileInfo
+from .color_consistency_service import ColorConsistencyService
 from .gemini_service import GeminiService, GenerationResult
 from .osm_service import OSMData, OSMService
 from .perspective_service import PerspectiveService
 from .render_service import RenderService
+from .road_style_service import RoadStyleService
 from .satellite_service import SatelliteService
 
 # Area threshold for per-tile OSM fetching (in km²)
@@ -140,6 +142,22 @@ class GenerationService:
 
         # Store effective rotation (orientation_degrees takes precedence over cardinal)
         self._rotation_degrees = project.style.effective_rotation_degrees
+
+        # Color consistency service (initialized if enabled)
+        cc_strength = project.style.color_consistency_strength
+        self._color_consistency: Optional[ColorConsistencyService] = (
+            ColorConsistencyService(strength=cc_strength)
+            if cc_strength > 0
+            else None
+        )
+
+        # Road style service (initialized if enabled)
+        road_style = project.style.road_style
+        self._road_style: Optional[RoadStyleService] = (
+            RoadStyleService(settings=road_style)
+            if road_style is not None and road_style.enabled
+            else None
+        )
 
     @property
     def region_area_km2(self) -> float:
@@ -492,6 +510,14 @@ class GenerationService:
             apply_perspective=apply_perspective,
         )
 
+        # Apply enhanced road layer if configured
+        if self._road_style is not None and osm_data.roads is not None:
+            road_ref = self._road_style.create_reference_layer(
+                osm_data.roads, spec.bbox, render_size
+            )
+            from PIL import Image as PILImage
+            composite = PILImage.alpha_composite(composite.convert("RGBA"), road_ref)
+
         # Apply orientation rotation if not north-up
         composite = self._apply_orientation_rotation(composite)
 
@@ -686,6 +712,16 @@ class GenerationService:
         # Return results in original spec order
         results = [result_map[(s.col, s.row)] for s in specs]
         progress.current_tile = None
+
+        # Apply color consistency: histogram-match each tile to the style reference
+        if self._color_consistency is not None and current_style_ref is not None:
+            print("Applying cross-tile color consistency...")
+            for result in results:
+                if result.generated_image is not None:
+                    result.generated_image = self._color_consistency.histogram_match(
+                        result.generated_image, current_style_ref
+                    )
+
         return results, progress
 
     def assemble_tiles(
@@ -797,6 +833,17 @@ class GenerationService:
                 (output_config.width, output_config.height),
                 Image.Resampling.LANCZOS,
             )
+
+        # Apply global color grading if color consistency is enabled
+        if self._color_consistency is not None:
+            # Use the first successful tile as the grading reference
+            ref_tile = next(
+                (r.generated_image for r in results if r.generated_image is not None),
+                None,
+            )
+            if ref_tile is not None:
+                print("Applying global color grading...")
+                assembled = self._color_consistency.apply_global_grading(assembled, ref_tile)
 
         # Apply perspective to final image
         if apply_perspective:
