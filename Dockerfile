@@ -11,6 +11,7 @@ RUN npm run build
 FROM python:3.12-slim
 
 # System dependencies for pyvips, GDAL, rasterio
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev \
     gdal-bin \
