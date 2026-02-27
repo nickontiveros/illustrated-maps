@@ -23,6 +23,8 @@ body {
   height: 100%;
   width: 100%;
   background-color: #e5e7eb;
+  z-index: 0;
+  isolation: isolate;
 }
 
 /* Custom scrollbar */
