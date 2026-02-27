@@ -164,7 +164,7 @@ function ProjectView() {
           </div>
 
           {/* Map, Deep Zoom viewer, or Tile Detail */}
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto relative z-0">
             {mapViewMode === 'geographic' ? (
               <MapCanvas project={project} />
             ) : mapViewMode === 'tiles' ? (
