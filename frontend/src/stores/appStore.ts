@@ -25,8 +25,8 @@ interface AppState {
   setSelectedLandmark: (landmark: LandmarkDetail | null) => void;
 
   // UI state
-  sidebarTab: 'tiles' | 'seams' | 'landmarks' | 'settings';
-  setSidebarTab: (tab: 'tiles' | 'seams' | 'landmarks' | 'settings') => void;
+  sidebarTab: 'tiles' | 'seams' | 'landmarks' | 'finalize' | 'settings';
+  setSidebarTab: (tab: 'tiles' | 'seams' | 'landmarks' | 'finalize' | 'settings') => void;
 
   // Active generations (keyed by project name)
   activeGenerations: Record<string, ActiveGeneration>;
@@ -34,8 +34,12 @@ interface AppState {
   updateGenerationProgress: (projectName: string, progress: GenerationProgress) => void;
 
   // Map view mode
-  mapViewMode: 'geographic' | 'tiles' | 'tile-detail';
-  setMapViewMode: (mode: 'geographic' | 'tiles' | 'tile-detail') => void;
+  mapViewMode: 'geographic' | 'tiles' | 'tile-detail' | 'finalized';
+  setMapViewMode: (mode: 'geographic' | 'tiles' | 'tile-detail' | 'finalized') => void;
+
+  // Finalized map state
+  finalizedStage: string | null;
+  setFinalizedStage: (stage: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -79,4 +83,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   mapViewMode: 'geographic',
   setMapViewMode: (mode) => set({ mapViewMode: mode }),
+
+  finalizedStage: null,
+  setFinalizedStage: (stage) => set({ finalizedStage: stage }),
 }));

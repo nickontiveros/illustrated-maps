@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useProject } from '@/hooks/useProjects';
 import { useAppStore } from '@/stores/appStore';
+import { useAPIKeys } from '@/hooks/useAPIKeys';
 import MapCanvas from './MapCanvas';
 import TileGrid from './TileGrid';
 import TileDetailPanel from './TileDetailPanel';
@@ -10,11 +11,16 @@ import Landmarks from './Landmarks';
 import Generation from './Generation';
 import DeepZoomViewer from './DeepZoomViewer';
 import ProjectSettings from './ProjectSettings';
+import APIKeySettings from './APIKeySettings';
+import PostProcess from './PostProcess';
+import FinalizedViewer from './FinalizedViewer';
 
 function ProjectView() {
   const { name } = useParams<{ name: string }>();
   const { data: project, isLoading, error } = useProject(name);
   const { sidebarTab, setSidebarTab, mapViewMode, setMapViewMode, setCurrentProject } = useAppStore();
+  const { hasGoogleKey, hasMapboxToken } = useAPIKeys();
+  const [showAPIKeys, setShowAPIKeys] = useState(false);
 
   // Track which project is currently being viewed (for legacy store accessors)
   React.useEffect(() => {
@@ -44,6 +50,7 @@ function ProjectView() {
     { id: 'tiles' as const, label: 'Tiles', icon: '🔲' },
     { id: 'seams' as const, label: 'Seams', icon: '🔗' },
     { id: 'landmarks' as const, label: 'Landmarks', icon: '📍' },
+    { id: 'finalize' as const, label: 'Finalize', icon: '✨' },
     { id: 'settings' as const, label: 'Settings', icon: '⚙️' },
   ];
 
@@ -60,7 +67,21 @@ function ProjectView() {
             {project.grid_cols}×{project.grid_rows} tiles • {project.area_km2.toFixed(1)} km²
           </div>
         </div>
-        <Generation projectName={name!} />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAPIKeys(true)}
+            className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+              hasGoogleKey && hasMapboxToken
+                ? 'border-green-300 text-green-700 hover:bg-green-50'
+                : 'border-amber-300 text-amber-700 hover:bg-amber-50 animate-pulse'
+            }`}
+            title="API Key Settings"
+          >
+            🔑 {hasGoogleKey && hasMapboxToken ? 'Keys Set' : 'Set API Keys'}
+          </button>
+          <Generation projectName={name!} />
+        </div>
+        <APIKeySettings open={showAPIKeys} onClose={() => setShowAPIKeys(false)} />
       </header>
 
       {/* Main content */}
@@ -90,6 +111,7 @@ function ProjectView() {
             {sidebarTab === 'tiles' && <TileGrid projectName={name!} />}
             {sidebarTab === 'seams' && <SeamRepair projectName={name!} />}
             {sidebarTab === 'landmarks' && <Landmarks projectName={name!} />}
+            {sidebarTab === 'finalize' && <PostProcess projectName={name!} />}
             {sidebarTab === 'settings' && <ProjectSettings project={project} />}
           </div>
         </div>
@@ -129,6 +151,16 @@ function ProjectView() {
             >
               Tile Detail
             </button>
+            <button
+              onClick={() => setMapViewMode('finalized')}
+              className={`px-3 py-1 text-sm rounded ${
+                mapViewMode === 'finalized'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Finalized
+            </button>
           </div>
 
           {/* Map, Deep Zoom viewer, or Tile Detail */}
@@ -137,6 +169,8 @@ function ProjectView() {
               <MapCanvas project={project} />
             ) : mapViewMode === 'tiles' ? (
               <DeepZoomViewer projectName={name!} className="w-full h-full" />
+            ) : mapViewMode === 'finalized' ? (
+              <FinalizedViewer projectName={name!} />
             ) : (
               <TileDetailPanel projectName={name!} />
             )}

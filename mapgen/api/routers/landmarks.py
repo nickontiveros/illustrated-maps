@@ -6,12 +6,13 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ...config import get_config
 from ...models.landmark import Landmark
 from ...services.landmark_service import LandmarkService
+from ..dependencies import APIKeys, get_api_keys, create_gemini_service
 from ..schemas import (
     LandmarkCreate,
     LandmarkDetail,
@@ -224,7 +225,7 @@ async def get_landmark_illustration(name: str, landmark_name: str):
 
 
 @router.post("/{name}/landmarks/{landmark_name}/illustrate", response_model=SuccessResponse)
-async def illustrate_landmark(name: str, landmark_name: str):
+async def illustrate_landmark(name: str, landmark_name: str, api_keys: APIKeys = Depends(get_api_keys)):
     """Generate an illustration for a landmark."""
     project = load_project(name)
     cache_dir = get_project_cache_dir(name)
@@ -261,7 +262,8 @@ async def illustrate_landmark(name: str, landmark_name: str):
         )
 
     # Create landmark service and illustrate
-    service = LandmarkService(project=project)
+    gemini = create_gemini_service(api_keys)
+    service = LandmarkService(project=project, gemini_service=gemini)
 
     result = await asyncio.to_thread(
         service.illustrate_landmark,
@@ -327,7 +329,7 @@ async def upload_landmark_photo(name: str, landmark_name: str, file: UploadFile 
 
 
 @router.post("/{name}/landmarks/illustrate-all", response_model=SuccessResponse)
-async def illustrate_all_landmarks(name: str):
+async def illustrate_all_landmarks(name: str, api_keys: APIKeys = Depends(get_api_keys)):
     """Generate illustrations for all landmarks that have photos."""
     project = load_project(name)
     cache_dir = get_project_cache_dir(name)
@@ -358,7 +360,8 @@ async def illustrate_all_landmarks(name: str):
         )
 
     # Illustrate all landmarks
-    service = LandmarkService(project=project)
+    gemini = create_gemini_service(api_keys)
+    service = LandmarkService(project=project, gemini_service=gemini)
     output_dir = get_landmark_output_dir(name)
     output_dir.mkdir(parents=True, exist_ok=True)
 

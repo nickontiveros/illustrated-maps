@@ -421,6 +421,31 @@ class SectionalGenerationStartResponse(BaseModel):
 
 
 # =============================================================================
+# Post-Processing Schemas
+# =============================================================================
+
+
+class PostProcessStatus(BaseModel):
+    """Status of post-processing stages."""
+
+    assembled: bool = False
+    composed: bool = False
+    labeled: bool = False
+    bordered: bool = False
+    outpainted: bool = False
+    latest_stage: Optional[str] = None
+
+
+class PipelineRequest(BaseModel):
+    """Request to run the post-processing pipeline."""
+
+    steps: list[str] = Field(
+        ...,
+        description="Steps to run in order: compose, labels, border, outpaint",
+    )
+
+
+# =============================================================================
 # Common Response Schemas
 # =============================================================================
 

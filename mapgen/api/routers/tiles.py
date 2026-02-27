@@ -4,12 +4,13 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
 
 from ...config import get_config
 from ...models.project import BoundingBox, Project
 from ...services.generation_service import GenerationProgress, GenerationService, TileSpec as ServiceTileSpec
+from ..dependencies import APIKeys, get_api_keys, create_gemini_service
 from ..schemas import (
     AllTileOffsetsResponse,
     GenerationProgress as ProgressSchema,
@@ -257,7 +258,13 @@ async def get_tile_preview(name: str, col: int, row: int):
 
 
 @router.post("/{name}/tiles/{col}/{row}/regenerate", response_model=SuccessResponse)
-async def regenerate_tile(name: str, col: int, row: int, request: TileRegenerateRequest):
+async def regenerate_tile(
+    name: str,
+    col: int,
+    row: int,
+    request: TileRegenerateRequest,
+    api_keys: APIKeys = Depends(get_api_keys),
+):
     """Regenerate a specific tile.
 
     This runs synchronously and may take some time.
@@ -289,11 +296,10 @@ async def regenerate_tile(name: str, col: int, row: int, request: TileRegenerate
             tile_path.unlink()
 
     # Generate the tile
-    from ...services.gemini_service import GeminiService
-
     service = GenerationService(
         project=project,
         cache_dir=cache_dir,
+        gemini_service=GeminiService(api_key=api_keys.google_api_key) if api_keys.google_api_key else None,
     )
 
     specs = service.calculate_tile_specs()
@@ -408,24 +414,26 @@ def load_style_reference(project_name: str):
 
 
 @router.post("/{name}/generate", response_model=GenerationStartResponse)
-async def start_generation(name: str, request: GenerationStartRequest):
+async def start_generation(
+    name: str,
+    request: GenerationStartRequest,
+    api_keys: APIKeys = Depends(get_api_keys),
+):
     """Start generating all tiles for a project.
 
     Returns immediately with a task ID. Use WebSocket to track progress.
     """
-    import os
-
-    # Validate API keys before starting
+    # Validate API keys (from headers or env vars)
     missing_keys = []
-    if not os.environ.get("GOOGLE_API_KEY"):
+    if not api_keys.google_api_key:
         missing_keys.append("GOOGLE_API_KEY")
-    if not os.environ.get("MAPBOX_ACCESS_TOKEN"):
+    if not api_keys.mapbox_access_token:
         missing_keys.append("MAPBOX_ACCESS_TOKEN")
     if missing_keys:
         raise HTTPException(
             status_code=400,
-            detail=f"Missing required environment variable(s): {', '.join(missing_keys)}. "
-            "Set them and restart the API server before generating."
+            detail=f"Missing required API key(s): {', '.join(missing_keys)}. "
+            "Provide them via the API Key Settings in the web UI, or set environment variables on the server."
         )
 
     project = load_project(name)
@@ -445,9 +453,24 @@ async def start_generation(name: str, request: GenerationStartRequest):
     # Load style reference if available
     style_ref = load_style_reference(name)
 
+    # Capture API keys for background task closure
+    from ...services.gemini_service import GeminiService
+    from ...services.satellite_service import SatelliteService
+
+    gemini_service = GeminiService(api_key=api_keys.google_api_key)
+    satellite_service = SatelliteService(
+        access_token=api_keys.mapbox_access_token,
+        cache_dir=str(cache_dir / "satellite") if cache_dir else None,
+    )
+
     async def run_generation():
         """Run the generation in background, then assemble tiles."""
-        service = GenerationService(project=project, cache_dir=cache_dir)
+        service = GenerationService(
+            project=project,
+            cache_dir=cache_dir,
+            gemini_service=gemini_service,
+            satellite_service=satellite_service,
+        )
         loop = asyncio.get_running_loop()
 
         # Progress callback runs in worker thread, so schedule update on main loop

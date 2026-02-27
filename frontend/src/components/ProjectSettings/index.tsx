@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useUpdateProject } from '@/hooks/useProjects';
+import { useMutation } from '@tanstack/react-query';
+import { api } from '@/api/client';
 import type {
   StyleSettings,
   BorderSettings,
@@ -102,6 +104,53 @@ function Section({
   );
 }
 
+// ── Cache management ─────────────────────────────────────────────
+function CacheManagement({ projectName }: { projectName: string }) {
+  const [confirming, setConfirming] = useState(false);
+  const clearCache = useMutation({
+    mutationFn: () => api.clearCache(projectName),
+    onSuccess: () => setConfirming(false),
+  });
+
+  return (
+    <Section title="Cache Management" defaultOpen={false}>
+      <p className="text-sm text-slate-500">
+        Clear cached tiles, references, and other generated data.
+      </p>
+      {confirming ? (
+        <div className="flex gap-2">
+          <button
+            onClick={() => clearCache.mutate()}
+            disabled={clearCache.isPending}
+            className="flex-1 px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+          >
+            {clearCache.isPending ? 'Clearing...' : 'Confirm Clear'}
+          </button>
+          <button
+            onClick={() => setConfirming(false)}
+            className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirming(true)}
+          className="w-full px-3 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50"
+        >
+          Clear Cache
+        </button>
+      )}
+      {clearCache.isSuccess && (
+        <div className="text-xs text-green-600">Cache cleared successfully.</div>
+      )}
+      {clearCache.isError && (
+        <div className="text-xs text-red-600">Failed to clear cache.</div>
+      )}
+    </Section>
+  );
+}
+
 // ── Main component ───────────────────────────────────────────────
 export default function ProjectSettings({ project }: ProjectSettingsProps) {
   const updateProject = useUpdateProject(project.name);
@@ -115,6 +164,10 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
   const [paletteStrength, setPaletteStrength] = useState(project.style.palette_enforcement_strength ?? 0);
   const [colorConsistency, setColorConsistency] = useState(project.style.color_consistency_strength ?? 0.5);
   const [terrainExaggeration, setTerrainExaggeration] = useState(project.style.terrain_exaggeration ?? 1.0);
+
+  // Orientation
+  const [orientation, setOrientation] = useState<StyleSettings['orientation']>(project.style.orientation ?? 'north');
+  const [orientationDegrees, setOrientationDegrees] = useState(project.style.orientation_degrees ?? 0);
 
   // Typography
   const [typoEnabled, setTypoEnabled] = useState(project.style.typography?.enabled ?? false);
@@ -156,6 +209,8 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
     setPaletteStrength(project.style.palette_enforcement_strength ?? 0);
     setColorConsistency(project.style.color_consistency_strength ?? 0.5);
     setTerrainExaggeration(project.style.terrain_exaggeration ?? 1.0);
+    setOrientation((project.style.orientation ?? 'north') as StyleSettings['orientation']);
+    setOrientationDegrees(project.style.orientation_degrees ?? 0);
     setTypoEnabled(project.style.typography?.enabled ?? false);
     setRoadLabels(project.style.typography?.road_labels ?? true);
     setDistrictLabels(project.style.typography?.district_labels ?? true);
@@ -184,6 +239,8 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
   const buildPayload = useCallback(() => {
     const style: StyleSettings = {
       ...project.style,
+      orientation: orientation as StyleSettings['orientation'],
+      orientation_degrees: orientationDegrees || null,
       palette_preset: palettePreset || null,
       palette_enforcement_strength: paletteStrength,
       color_consistency_strength: colorConsistency,
@@ -258,7 +315,7 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
     };
   }, [
     project, title, subtitle, palettePreset, paletteStrength, colorConsistency,
-    terrainExaggeration, typoEnabled, roadLabels, districtLabels, waterLabels,
+    terrainExaggeration, orientation, orientationDegrees, typoEnabled, roadLabels, districtLabels, waterLabels,
     parkLabels, fontScale, maxLabels, roadEnabled, roadPreset, wobble, roadOverlay,
     borderEnabled, borderStyle, borderMargin, showCompass, showLegend,
     atmoEnabled, hazeStrength, contrastReduction,
@@ -274,6 +331,8 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
     if (paletteStrength !== (t.style.palette_enforcement_strength ?? 0)) return true;
     if (colorConsistency !== (t.style.color_consistency_strength ?? 0.5)) return true;
     if (terrainExaggeration !== (t.style.terrain_exaggeration ?? 1.0)) return true;
+    if (orientation !== (t.style.orientation ?? 'north')) return true;
+    if ((orientationDegrees ?? 0) !== (t.style.orientation_degrees ?? 0)) return true;
     if (typoEnabled !== (t.style.typography?.enabled ?? false)) return true;
     if (roadLabels !== (t.style.typography?.road_labels ?? true)) return true;
     if (districtLabels !== (t.style.typography?.district_labels ?? true)) return true;
@@ -324,6 +383,37 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
           className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
         />
       </section>
+
+      {/* Orientation Section */}
+      <Section title="Map Orientation" defaultOpen={false}>
+        <div>
+          <label className="block text-sm text-slate-500 mb-1">Cardinal Direction</label>
+          <select
+            value={orientation}
+            onChange={(e) => {
+              const val = e.target.value as StyleSettings['orientation'];
+              setOrientation(val);
+              const degreeMap: Record<string, number> = { north: 0, south: 180, east: 90, west: 270 };
+              setOrientationDegrees(degreeMap[val] ?? 0);
+            }}
+            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+          >
+            <option value="north">North (default)</option>
+            <option value="south">South</option>
+            <option value="east">East</option>
+            <option value="west">West</option>
+          </select>
+        </div>
+        <Slider
+          label="Custom Rotation"
+          value={orientationDegrees ?? 0}
+          onChange={setOrientationDegrees}
+          min={0}
+          max={359}
+          step={1}
+          suffix="°"
+        />
+      </Section>
 
       {/* Style Section */}
       <Section title="Style & Color" defaultOpen>
@@ -492,6 +582,9 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
           {project.detail_level}
         </div>
       </Section>
+
+      {/* Cache Management */}
+      <CacheManagement projectName={project.name} />
 
       {/* Save button */}
       {isDirty && (

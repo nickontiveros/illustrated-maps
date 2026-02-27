@@ -277,6 +277,32 @@ export interface ActiveTaskInfo {
   };
 }
 
+// API Config
+export interface APIConfig {
+  cache_dir: string;
+  output_dir: string;
+  default_tile_size: number;
+  default_overlap: number;
+  default_dpi: number;
+  gemini_model: string;
+  has_google_api_key: boolean;
+  has_mapbox_token: boolean;
+  google_api_key_source: 'client' | 'server' | 'missing';
+  mapbox_token_source: 'client' | 'server' | 'missing';
+}
+
+// Post-processing types
+export type PostProcessStage = 'assembled' | 'composed' | 'labeled' | 'bordered' | 'outpainted';
+
+export interface PostProcessStatus {
+  assembled: boolean;
+  composed: boolean;
+  labeled: boolean;
+  bordered: boolean;
+  outpainted: boolean;
+  latest_stage: PostProcessStage | null;
+}
+
 // API response types
 export interface SuccessResponse {
   success: boolean;

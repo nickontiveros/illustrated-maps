@@ -237,6 +237,20 @@ async def delete_project(
     return SuccessResponse(message=f"Project '{name}' deleted successfully")
 
 
+@router.delete("/{name}/cache", response_model=SuccessResponse)
+async def clear_project_cache(name: str):
+    """Clear cached data for a project (generated tiles, references, etc.)."""
+    load_project(name)  # Validate project exists
+    cache_dir = get_project_cache_dir(name)
+
+    if not cache_dir.exists():
+        return SuccessResponse(message="No cache to clear")
+
+    import shutil
+    shutil.rmtree(cache_dir)
+    return SuccessResponse(message=f"Cache cleared for project '{name}'")
+
+
 @router.get("/{name}/cost-estimate")
 async def estimate_project_cost(name: str):
     """Estimate the cost to generate a project."""

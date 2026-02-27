@@ -1,3 +1,5 @@
+import { getAuthHeaders } from '@/hooks/useAPIKeys';
+
 const API_BASE = '/api';
 
 class ApiError extends Error {
@@ -24,15 +26,25 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json();
 }
 
+/** Build headers with API keys and optional extra headers. */
+function buildHeaders(extra?: Record<string, string>): Record<string, string> {
+  return { ...getAuthHeaders(), ...extra };
+}
+
+/** Build headers for JSON requests. */
+function jsonHeaders(): Record<string, string> {
+  return buildHeaders({ 'Content-Type': 'application/json' });
+}
+
 export const api = {
   // Projects
   async listProjects() {
-    const response = await fetch(`${API_BASE}/projects`);
+    const response = await fetch(`${API_BASE}/projects`, { headers: buildHeaders() });
     return handleResponse<import('@/types').ProjectSummary[]>(response);
   },
 
   async getProject(name: string) {
-    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}`);
+    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, { headers: buildHeaders() });
     return handleResponse<import('@/types').ProjectDetail>(response);
   },
 
@@ -45,7 +57,7 @@ export const api = {
   }) {
     const response = await fetch(`${API_BASE}/projects`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(),
       body: JSON.stringify(data),
     });
     return handleResponse<import('@/types').ProjectDetail>(response);
@@ -62,7 +74,7 @@ export const api = {
   }) {
     const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(),
       body: JSON.stringify(data),
     });
     return handleResponse<import('@/types').ProjectDetail>(response);
@@ -71,25 +83,26 @@ export const api = {
   async deleteProject(name: string, deleteCache = true) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(name)}?delete_cache=${deleteCache}`,
-      { method: 'DELETE' }
+      { method: 'DELETE', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
 
   async getProjectCostEstimate(name: string) {
-    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}/cost-estimate`);
+    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}/cost-estimate`, { headers: buildHeaders() });
     return handleResponse<import('@/types').CostEstimate>(response);
   },
 
   // Tiles
   async getTileGrid(projectName: string) {
-    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles`);
+    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles`, { headers: buildHeaders() });
     return handleResponse<import('@/types').TileGrid>(response);
   },
 
   async getTileInfo(projectName: string, col: number, row: number) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}`,
+      { headers: buildHeaders() }
     );
     return handleResponse<import('@/types').TileSpec>(response);
   },
@@ -113,7 +126,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}/regenerate`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify({ force }),
       }
     );
@@ -129,7 +142,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/generate`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify(options ?? {}),
       }
     );
@@ -138,7 +151,8 @@ export const api = {
 
   async getGenerationStatus(projectName: string) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/generate/status`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/generate/status`,
+      { headers: buildHeaders() }
     );
     return handleResponse<import('@/types').GenerationProgress>(response);
   },
@@ -146,20 +160,21 @@ export const api = {
   async cancelGeneration(projectName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/generate/cancel`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
 
   // Seams
   async listSeams(projectName: string) {
-    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectName)}/seams`);
+    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectName)}/seams`, { headers: buildHeaders() });
     return handleResponse<import('@/types').SeamList>(response);
   },
 
   async getSeam(projectName: string, seamId: string) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/seams/${encodeURIComponent(seamId)}`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/seams/${encodeURIComponent(seamId)}`,
+      { headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SeamInfo>(response);
   },
@@ -175,7 +190,7 @@ export const api = {
   async repairSeam(projectName: string, seamId: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/seams/${encodeURIComponent(seamId)}/repair`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -185,7 +200,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/seams/repair-batch`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify({ seam_ids: seamIds }),
       }
     );
@@ -195,7 +210,7 @@ export const api = {
   async repairAllSeams(projectName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/seams/repair-all`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -203,7 +218,8 @@ export const api = {
   // Landmarks
   async listLandmarks(projectName: string) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks`,
+      { headers: buildHeaders() }
     );
     return handleResponse<import('@/types').LandmarkDetail[]>(response);
   },
@@ -222,7 +238,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify(data),
       }
     );
@@ -240,7 +256,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/${encodeURIComponent(landmarkName)}`,
       {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify(data),
       }
     );
@@ -250,7 +266,7 @@ export const api = {
   async deleteLandmark(projectName: string, landmarkName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/${encodeURIComponent(landmarkName)}`,
-      { method: 'DELETE' }
+      { method: 'DELETE', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -266,7 +282,7 @@ export const api = {
   async illustrateLandmark(projectName: string, landmarkName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/${encodeURIComponent(landmarkName)}/illustrate`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -279,6 +295,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/${encodeURIComponent(landmarkName)}/upload-photo`,
       {
         method: 'POST',
+        headers: buildHeaders(),
         body: formData,
       }
     );
@@ -290,7 +307,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/discover`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify(data ?? {}),
       }
     );
@@ -300,7 +317,7 @@ export const api = {
   async illustrateAllLandmarks(projectName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/illustrate-all`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -308,7 +325,8 @@ export const api = {
   // Tile Offsets
   async getTileOffset(projectName: string, col: number, row: number) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}/offset`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}/offset`,
+      { headers: buildHeaders() }
     );
     return handleResponse<import('@/types').TileOffset>(response);
   },
@@ -318,7 +336,7 @@ export const api = {
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/${col}/${row}/offset`,
       {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify({ dx, dy }),
       }
     );
@@ -327,7 +345,8 @@ export const api = {
 
   async getAllTileOffsets(projectName: string) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/offsets`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/tiles/offsets`,
+      { headers: buildHeaders() }
     );
     return handleResponse<{ project_name: string; offsets: import('@/types').TileOffset[] }>(response);
   },
@@ -338,7 +357,7 @@ export const api = {
     formData.append('file', file);
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`,
-      { method: 'POST', body: formData }
+      { method: 'POST', headers: buildHeaders(), body: formData }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -350,7 +369,7 @@ export const api = {
   async deleteStyleReference(projectName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`,
-      { method: 'DELETE' }
+      { method: 'DELETE', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -358,7 +377,7 @@ export const api = {
   async hasStyleReference(projectName: string): Promise<boolean> {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-reference`,
-      { method: 'HEAD' }
+      { method: 'HEAD', headers: buildHeaders() }
     );
     return response.ok;
   },
@@ -367,21 +386,28 @@ export const api = {
   async assembleTiles(projectName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/assemble`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
 
   // Active Tasks
   async getActiveTasks() {
-    const response = await fetch(`${API_BASE}/tasks/active`);
+    const response = await fetch(`${API_BASE}/tasks/active`, { headers: buildHeaders() });
     return handleResponse<import('@/types').ActiveTaskInfo[]>(response);
+  },
+
+  // Config
+  async getConfig() {
+    const response = await fetch(`${API_BASE}/config`, { headers: buildHeaders() });
+    return handleResponse<import('@/types').APIConfig>(response);
   },
 
   // DZI (Deep Zoom Images)
   async getDZIInfo(projectName: string) {
     const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/dzi/info`
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/dzi/info`,
+      { headers: buildHeaders() }
     );
     return handleResponse<{
       project_name: string;
@@ -399,7 +425,7 @@ export const api = {
   async generateDZI(projectName: string, force = false) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/dzi/generate?force=${force}`,
-      { method: 'POST' }
+      { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -410,6 +436,90 @@ export const api = {
 
   getDZITileUrl(projectName: string, level: number, col: number, row: number, format = 'jpg') {
     return `${API_BASE}/projects/${encodeURIComponent(projectName)}/dzi/assembled_files/${level}/${col}_${row}.${format}`;
+  },
+
+  // Post-processing
+  async getPostProcessStatus(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/status`,
+      { headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').PostProcessStatus>(response);
+  },
+
+  async composeLandmarks(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/compose`,
+      { method: 'POST', headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  async addLabels(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/labels`,
+      { method: 'POST', headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  async addBorder(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/border`,
+      { method: 'POST', headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  async startOutpaint(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/outpaint`,
+      { method: 'POST', headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').GenerationStartResponse>(response);
+  },
+
+  async startPipeline(projectName: string, steps: string[]) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/pipeline`,
+      {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ steps }),
+      }
+    );
+    return handleResponse<import('@/types').GenerationStartResponse>(response);
+  },
+
+  getPostProcessImageUrl(projectName: string, stage: string, size?: number) {
+    const params = size ? `?size=${size}` : '';
+    return `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/${stage}/image${params}`;
+  },
+
+  async exportPSD(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/export-psd`,
+      { method: 'POST', headers: buildHeaders() }
+    );
+    return response;
+  },
+
+  // Previews
+  getPreviewOSMUrl(projectName: string) {
+    return `${API_BASE}/projects/${encodeURIComponent(projectName)}/preview/osm`;
+  },
+
+  getPreviewCompositeUrl(projectName: string) {
+    return `${API_BASE}/projects/${encodeURIComponent(projectName)}/preview/composite`;
+  },
+
+  // Cache
+  async clearCache(projectName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/cache`,
+      { method: 'DELETE', headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
   },
 };
 

@@ -5,12 +5,13 @@ import io
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image
 
 from ...models.seam import SeamInfo as ServiceSeamInfo
 from ...services.seam_repair_service import SeamRepairService
+from ..dependencies import APIKeys, get_api_keys, create_gemini_service
 from ..schemas import (
     SeamBatchRepairRequest,
     SeamInfo,
@@ -159,7 +160,7 @@ async def get_seam_repaired(name: str, seam_id: str):
 
 
 @router.post("/{name}/seams/{seam_id}/repair", response_model=SuccessResponse)
-async def repair_seam(name: str, seam_id: str):
+async def repair_seam(name: str, seam_id: str, api_keys: APIKeys = Depends(get_api_keys)):
     """Repair a single seam."""
     project = load_project(name)
     service = get_seam_service()
@@ -178,9 +179,7 @@ async def repair_seam(name: str, seam_id: str):
 
     assembled = load_assembled_image(name)
 
-    from ...services.gemini_service import GeminiService
-
-    gemini = GeminiService()
+    gemini = create_gemini_service(api_keys)
     result = await asyncio.to_thread(
         service.repair_seam,
         seam,
@@ -200,7 +199,11 @@ async def repair_seam(name: str, seam_id: str):
 
 
 @router.post("/{name}/seams/repair-batch", response_model=SuccessResponse)
-async def repair_seams_batch(name: str, request: SeamBatchRepairRequest):
+async def repair_seams_batch(
+    name: str,
+    request: SeamBatchRepairRequest,
+    api_keys: APIKeys = Depends(get_api_keys),
+):
     """Repair multiple seams in batch."""
     project = load_project(name)
     service = get_seam_service()
@@ -217,9 +220,7 @@ async def repair_seams_batch(name: str, request: SeamBatchRepairRequest):
 
     assembled = load_assembled_image(name)
 
-    from ...services.gemini_service import GeminiService
-
-    gemini = GeminiService()
+    gemini = create_gemini_service(api_keys)
 
     # Repair seams
     _updated_image, results = await asyncio.to_thread(
@@ -248,7 +249,7 @@ async def repair_seams_batch(name: str, request: SeamBatchRepairRequest):
 
 
 @router.post("/{name}/seams/repair-all", response_model=SuccessResponse)
-async def repair_all_seams(name: str):
+async def repair_all_seams(name: str, api_keys: APIKeys = Depends(get_api_keys)):
     """Repair all seams in the project."""
     project = load_project(name)
     service = get_seam_service()
@@ -264,4 +265,4 @@ async def repair_all_seams(name: str):
         return SuccessResponse(message="All seams already repaired")
 
     request = SeamBatchRepairRequest(seam_ids=[s.id for s in unrepaired])
-    return await repair_seams_batch(name, request)
+    return await repair_seams_batch(name, request, api_keys=api_keys)

@@ -5,12 +5,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..config import get_config
-from .routers import dzi, landmarks, projects, seams, tiles
+from .routers import dzi, landmarks, postprocess, projects, seams, tiles
 from .tasks import task_manager
 from .websocket import router as websocket_router
 
@@ -50,6 +50,7 @@ app.include_router(tiles.router, prefix="/api/projects", tags=["tiles"])
 app.include_router(seams.router, prefix="/api/projects", tags=["seams"])
 app.include_router(landmarks.router, prefix="/api/projects", tags=["landmarks"])
 app.include_router(dzi.router, prefix="/api/projects", tags=["dzi"])
+app.include_router(postprocess.router, prefix="/api/projects", tags=["postprocess"])
 app.include_router(websocket_router, prefix="/api", tags=["websocket"])
 
 
@@ -60,9 +61,11 @@ async def health_check():
 
 
 @app.get("/api/config")
-async def get_api_config():
+async def get_api_config(request: Request):
     """Get API configuration (non-sensitive)."""
     config = get_config()
+    google_key = request.headers.get("X-Google-API-Key") or config.google_api_key
+    mapbox_token = request.headers.get("X-Mapbox-Access-Token") or config.mapbox_access_token
     return {
         "cache_dir": str(config.cache_dir),
         "output_dir": str(config.output_dir),
@@ -70,8 +73,10 @@ async def get_api_config():
         "default_overlap": config.default_overlap,
         "default_dpi": config.default_dpi,
         "gemini_model": config.gemini_model,
-        "has_google_api_key": bool(config.google_api_key),
-        "has_mapbox_token": bool(config.mapbox_access_token),
+        "has_google_api_key": bool(google_key),
+        "has_mapbox_token": bool(mapbox_token),
+        "google_api_key_source": "client" if request.headers.get("X-Google-API-Key") else ("server" if config.google_api_key else "missing"),
+        "mapbox_token_source": "client" if request.headers.get("X-Mapbox-Access-Token") else ("server" if config.mapbox_access_token else "missing"),
     }
 
 
