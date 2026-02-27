@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import get_config
@@ -136,3 +137,26 @@ def mount_static_files(app: FastAPI, projects_dir: Optional[Path] = None):
 
 # Mount static files if directories exist
 mount_static_files(app)
+
+# --- SPA (single-page app) serving for production builds ---
+# Serves the built React frontend when /app/static exists (i.e. inside the Docker image).
+# This must come AFTER all API routers and /static/* mounts.
+_static_dir = Path(os.environ.get("STATIC_DIR", "/app/static"))
+
+if _static_dir.is_dir():
+    # Vite puts hashed JS/CSS bundles in assets/
+    _assets_dir = _static_dir / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="frontend_assets")
+
+    # SPA catch-all: any non-API, non-static GET request returns index.html
+    _index_html = _static_dir / "index.html"
+
+    @app.get("/{full_path:path}")
+    async def spa_catch_all(full_path: str):
+        """Serve the React SPA for any path not matched by API or static mounts."""
+        # Serve actual static files if they exist (e.g. favicon, manifest)
+        candidate = _static_dir / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_index_html))
