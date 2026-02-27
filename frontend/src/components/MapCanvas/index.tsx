@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { MapContainer, TileLayer, Rectangle, Marker, Popup, useMap } from 'react-leaflet';
-import { LatLngBounds, LatLng } from 'leaflet';
+import { LatLngBounds } from 'leaflet';
 import type { ProjectDetail, TileSpec, LandmarkDetail } from '@/types';
 import { useTileGrid } from '@/hooks/useTiles';
 import { useLandmarks } from '@/hooks/useLandmarks';
