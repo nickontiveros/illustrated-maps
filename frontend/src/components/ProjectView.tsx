@@ -89,18 +89,18 @@ function ProjectView() {
         {/* Sidebar */}
         <div className="w-80 bg-white border-r border-slate-200 flex flex-col">
           {/* Tabs */}
-          <div className="flex border-b border-slate-200">
+          <div className="flex border-b border-slate-200 min-w-0">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setSidebarTab(tab.id)}
-                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                className={`flex-1 min-w-0 px-1.5 py-3 text-xs font-medium transition-colors truncate ${
                   sidebarTab === tab.id
                     ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
                     : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
                 }`}
               >
-                <span className="mr-1">{tab.icon}</span>
+                <span className="mr-0.5">{tab.icon}</span>
                 {tab.label}
               </button>
             ))}
