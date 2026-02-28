@@ -1372,6 +1372,8 @@ def assemble(
 @click.option("--logo", "-l", type=click.Path(), help="Path to logo PNG (relative to project dir)")
 @click.option("--scale", "-s", type=float, default=1.5, help="Scale factor (1.0=actual, >1=exaggerated)")
 @click.option("--z-index", "-z", type=int, default=0, help="Z-index for layering")
+@click.option("--wikipedia-url", type=str, default=None, help="Wikipedia article URL")
+@click.option("--wikidata-id", type=str, default=None, help="Wikidata entity ID (e.g., Q12345)")
 def add_landmark(
     project_path: str,
     name: str,
@@ -1381,6 +1383,8 @@ def add_landmark(
     logo: Optional[str],
     scale: float,
     z_index: int,
+    wikipedia_url: Optional[str],
+    wikidata_id: Optional[str],
 ):
     """Add a landmark to the project.
 
@@ -1428,6 +1432,8 @@ def add_landmark(
         logo=logo,
         scale=scale,
         z_index=z_index,
+        wikipedia_url=wikipedia_url,
+        wikidata_id=wikidata_id,
     )
 
     # Add to project and save
@@ -1766,12 +1772,14 @@ def compose(
 @click.option("--skip-tiles", is_flag=True, help="Skip tile generation (use cached)")
 @click.option("--skip-landmarks", is_flag=True, help="Skip landmark illustration")
 @click.option("--perspective/--no-perspective", default=True, help="Apply aerial perspective")
+@click.option("--shields/--no-shields", default=True, help="Include highway shields")
 def generate_full(
     project_path: str,
     output: Optional[str],
     skip_tiles: bool,
     skip_landmarks: bool,
     perspective: bool,
+    shields: bool,
 ):
     """Generate full illustrated map with landmarks.
 
@@ -1985,6 +1993,24 @@ def generate_full(
             final_image = base_map
     else:
         final_image = base_map
+
+    # Phase 5: Highway shields
+    if shields:
+        console.print("\n[bold cyan]Phase 5: Adding highway shields[/bold cyan]")
+        from .services.highway_shield_service import HighwayShieldService
+
+        osm_data = _fetch_osm_data(project)
+        if osm_data.roads is not None:
+            shield_specs = HighwayShieldService.extract_shield_positions(
+                osm_data.roads, project.region, final_image.size,
+            )
+            if shield_specs:
+                final_image = HighwayShieldService.render_shields_on_image(
+                    final_image, shield_specs,
+                )
+                console.print(f"  [green]Added {len(shield_specs)} highway shields[/green]")
+            else:
+                console.print("  [dim]No highway shields found[/dim]")
 
     # Save final result
     if output:
@@ -2495,7 +2521,8 @@ def export_psd(
               type=click.Choice(["full", "simplified", "regional", "country", "auto"]),
               default="auto",
               help="OSM detail level")
-def add_labels(project_path: str, input_image: str, output: Optional[str], detail_level: str):
+@click.option("--shields/--no-shields", default=True, help="Include highway shields")
+def add_labels(project_path: str, input_image: str, output: Optional[str], detail_level: str, shields: bool):
     """Add typography labels to an existing map image."""
     from .services.typography_service import TypographyService
     from .models.typography import TypographySettings
@@ -2528,6 +2555,20 @@ def add_labels(project_path: str, input_image: str, output: Optional[str], detai
         osm_data=osm_data,
         bbox=project.region,
     )
+
+    # Add highway shields
+    if shields and osm_data.roads is not None:
+        from .services.highway_shield_service import HighwayShieldService
+
+        console.print("  Adding highway shields...")
+        shield_specs = HighwayShieldService.extract_shield_positions(
+            osm_data.roads, project.region, result.size,
+        )
+        if shield_specs:
+            result = HighwayShieldService.render_shields_on_image(result, shield_specs)
+            console.print(f"  [green]Added {len(shield_specs)} highway shields[/green]")
+        else:
+            console.print("  [dim]No highway shields found[/dim]")
 
     # Save
     output_path = Path(output) if output else project.output_dir / timestamped_filename(f"{project.name}_labeled")

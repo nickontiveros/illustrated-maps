@@ -73,6 +73,8 @@ async def create_landmark(name: str, request: LandmarkCreate):
         scale=request.scale,
         z_index=request.z_index,
         rotation=request.rotation,
+        wikipedia_url=request.wikipedia_url,
+        wikidata_id=request.wikidata_id,
     )
 
     # Add to project and save
@@ -121,6 +123,10 @@ async def update_landmark(name: str, landmark_name: str, request: LandmarkUpdate
         landmark.z_index = request.z_index
     if request.rotation is not None:
         landmark.rotation = request.rotation
+    if request.wikipedia_url is not None:
+        landmark.wikipedia_url = request.wikipedia_url
+    if request.wikidata_id is not None:
+        landmark.wikidata_id = request.wikidata_id
 
     # Save project
     save_project(name, project)
@@ -392,3 +398,57 @@ async def illustrate_all_landmarks(name: str, api_keys: APIKeys = Depends(get_ap
     return SuccessResponse(
         message=f"Illustration completed: {succeeded} succeeded, {failed} failed"
     )
+
+
+@router.post("/{name}/landmarks/{landmark_name}/fetch-photo", response_model=SuccessResponse)
+async def fetch_wikipedia_photo(name: str, landmark_name: str):
+    """Fetch a photo from Wikipedia/Wikidata for a specific landmark.
+
+    Uses the landmark's wikipedia_url or wikidata_id to find an image.
+    Falls back to searching Wikipedia by landmark name.
+    """
+    project = load_project(name)
+
+    landmark = None
+    landmark_idx = None
+    for i, lm in enumerate(project.landmarks):
+        if lm.name.lower() == landmark_name.lower():
+            landmark = lm
+            landmark_idx = i
+            break
+
+    if landmark is None:
+        raise HTTPException(status_code=404, detail=f"Landmark '{landmark_name}' not found")
+
+    from ...services.wikipedia_image_service import WikipediaImageService
+
+    cache_dir = str(project.project_dir / "cache" / "wikipedia") if project.project_dir else None
+
+    def do_fetch():
+        service = WikipediaImageService(cache_dir=cache_dir)
+        return service.fetch_image_for_landmark(
+            name=landmark.name,
+            wikipedia_url=landmark.wikipedia_url,
+            wikidata_id=landmark.wikidata_id,
+        )
+
+    image = await asyncio.to_thread(do_fetch)
+
+    if image is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Wikipedia/Wikidata photo found for '{landmark_name}'"
+        )
+
+    # Save to project
+    landmarks_dir = project.project_dir / "landmarks" / "photos"
+    landmarks_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = landmark.name.replace(" ", "_").replace("/", "_")[:50]
+    save_path = landmarks_dir / f"{safe_name}_wiki.jpg"
+    image.save(save_path, "JPEG", quality=90)
+
+    # Update landmark photo path
+    project.landmarks[landmark_idx].photo = str(save_path.relative_to(project.project_dir))
+    save_project(name, project)
+
+    return SuccessResponse(message=f"Photo fetched and saved for '{landmark_name}'")

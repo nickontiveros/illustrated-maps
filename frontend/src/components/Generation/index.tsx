@@ -239,6 +239,28 @@ function GenerationModal({ progress, onClose, onCancel, isCancelling }: Generati
           </div>
         </div>
 
+        {/* Phase info */}
+        {progress.phase && isRunning && progress.phase !== 'generating_tiles' && (
+          <div className="bg-indigo-50 rounded-lg p-3 mb-6">
+            <div className="text-sm text-indigo-600 mb-1">
+              {progress.phase === 'fetching_osm' ? 'Loading Map Data' :
+               progress.phase === 'fetching_satellite' ? 'Downloading Imagery' :
+               progress.phase === 'assembling' ? 'Assembling' : progress.phase}
+            </div>
+            {progress.phase_detail && (
+              <div className="font-medium text-indigo-800 text-sm">{progress.phase_detail}</div>
+            )}
+            {progress.phase_progress && (
+              <div className="mt-2 h-1.5 bg-indigo-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-indigo-500 transition-all duration-300"
+                  style={{ width: `${Math.round((progress.phase_progress[0] / progress.phase_progress[1]) * 100)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Current tile */}
         {progress.current_tile && isRunning && (
           <div className="bg-blue-50 rounded-lg p-3 mb-6">

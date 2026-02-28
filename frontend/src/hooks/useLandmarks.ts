@@ -22,6 +22,8 @@ export function useCreateLandmark(projectName: string) {
       scale?: number;
       z_index?: number;
       rotation?: number;
+      wikipedia_url?: string;
+      wikidata_id?: string;
     }) => api.createLandmark(projectName, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project', projectName, 'landmarks'] });
@@ -45,6 +47,8 @@ export function useUpdateLandmark(projectName: string) {
         scale?: number;
         z_index?: number;
         rotation?: number;
+        wikipedia_url?: string;
+        wikidata_id?: string;
       };
     }) => api.updateLandmark(projectName, landmarkName, data),
     onSuccess: () => {
@@ -105,6 +109,17 @@ export function useIllustrateAllLandmarks(projectName: string) {
 
   return useMutation({
     mutationFn: () => api.illustrateAllLandmarks(projectName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectName, 'landmarks'] });
+    },
+  });
+}
+
+export function useFetchWikipediaPhoto(projectName: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (landmarkName: string) => api.fetchWikipediaPhoto(projectName, landmarkName),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project', projectName, 'landmarks'] });
     },

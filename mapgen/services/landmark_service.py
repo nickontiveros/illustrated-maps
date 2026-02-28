@@ -68,22 +68,46 @@ class LandmarkService:
 
     def load_photo(self, landmark: Landmark) -> Optional[Image.Image]:
         """
-        Load landmark photo from disk.
+        Load landmark photo from disk, falling back to Wikipedia if available.
 
         Args:
             landmark: Landmark to load photo for
 
         Returns:
-            PIL Image or None if no photo path set
+            PIL Image or None if no photo available
         """
-        if landmark.photo is None:
-            return None
+        # Try local file first
+        if landmark.photo is not None:
+            photo_path = landmark.resolve_photo_path(self.project.project_dir)
+            if photo_path is not None and photo_path.exists():
+                return Image.open(photo_path).convert("RGBA")
 
-        photo_path = landmark.resolve_photo_path(self.project.project_dir)
-        if photo_path is None or not photo_path.exists():
-            return None
+        # Wikipedia/Wikidata fallback
+        if landmark.wikipedia_url or landmark.wikidata_id:
+            try:
+                from .wikipedia_image_service import WikipediaImageService
 
-        return Image.open(photo_path).convert("RGBA")
+                cache_dir = str(self.project.project_dir / "cache" / "wikipedia") if self.project.project_dir else None
+                wiki_service = WikipediaImageService(cache_dir=cache_dir)
+                image = wiki_service.fetch_image_for_landmark(
+                    name=landmark.name,
+                    wikipedia_url=landmark.wikipedia_url,
+                    wikidata_id=landmark.wikidata_id,
+                )
+                if image is not None:
+                    # Save to project landmarks dir so it's available locally next time
+                    if self.project.project_dir:
+                        landmarks_dir = self.project.project_dir / "landmarks" / "photos"
+                        landmarks_dir.mkdir(parents=True, exist_ok=True)
+                        safe_name = landmark.name.replace(" ", "_").replace("/", "_")[:50]
+                        save_path = landmarks_dir / f"{safe_name}_wiki.jpg"
+                        image.save(save_path, "JPEG", quality=90)
+                        landmark.photo = str(save_path.relative_to(self.project.project_dir))
+                    return image.convert("RGBA")
+            except Exception as e:
+                print(f"Warning: Wikipedia photo fetch failed for {landmark.name}: {e}")
+
+        return None
 
     def load_logo(self, landmark: Landmark) -> Optional[Image.Image]:
         """

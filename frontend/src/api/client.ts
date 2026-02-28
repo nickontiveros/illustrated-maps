@@ -233,6 +233,8 @@ export const api = {
     scale?: number;
     z_index?: number;
     rotation?: number;
+    wikipedia_url?: string;
+    wikidata_id?: string;
   }) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks`,
@@ -251,6 +253,8 @@ export const api = {
     scale?: number;
     z_index?: number;
     rotation?: number;
+    wikipedia_url?: string;
+    wikidata_id?: string;
   }) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/${encodeURIComponent(landmarkName)}`,
@@ -317,6 +321,14 @@ export const api = {
   async illustrateAllLandmarks(projectName: string) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/illustrate-all`,
+      { method: 'POST', headers: buildHeaders() }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
+  async fetchWikipediaPhoto(projectName: string, landmarkName: string) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/landmarks/${encodeURIComponent(landmarkName)}/fetch-photo`,
       { method: 'POST', headers: buildHeaders() }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
@@ -455,10 +467,14 @@ export const api = {
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
 
-  async addLabels(projectName: string) {
+  async addLabels(projectName: string, includeShields: boolean = true) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/labels`,
-      { method: 'POST', headers: buildHeaders() }
+      {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ include_shields: includeShields }),
+      }
     );
     return handleResponse<import('@/types').SuccessResponse>(response);
   },
@@ -479,13 +495,13 @@ export const api = {
     return handleResponse<import('@/types').GenerationStartResponse>(response);
   },
 
-  async startPipeline(projectName: string, steps: string[]) {
+  async startPipeline(projectName: string, steps: string[], includeShields: boolean = true) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/pipeline`,
       {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify({ steps }),
+        body: JSON.stringify({ steps, include_shields: includeShields }),
       }
     );
     return handleResponse<import('@/types').GenerationStartResponse>(response);

@@ -24,7 +24,7 @@ export function useComposeLandmarks(projectName: string) {
 export function useAddLabels(projectName: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.addLabels(projectName),
+    mutationFn: (includeShields: boolean = true) => api.addLabels(projectName, includeShields),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['postprocess-status', projectName] });
     },
@@ -54,7 +54,8 @@ export function useStartOutpaint(projectName: string) {
 export function useStartPipeline(projectName: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (steps: string[]) => api.startPipeline(projectName, steps),
+    mutationFn: ({ steps, includeShields = true }: { steps: string[]; includeShields?: boolean }) =>
+      api.startPipeline(projectName, steps, includeShields),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['postprocess-status', projectName] });
     },

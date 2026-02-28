@@ -41,6 +41,16 @@ PRESETS: dict[str, list[str]] = {
         "#C0C0C0",  # silver
         "#F0F0F0",  # near white
     ],
+    "sonoran_desert": [
+        "#F5E6C8",  # warm sand
+        "#D4956A",  # terracotta
+        "#A8B88C",  # sage green
+        "#6BBFB0",  # turquoise accent
+        "#C1713A",  # sienna
+        "#FAF0DE",  # cream
+        "#8B6F5E",  # desert stone
+        "#E8C9A0",  # light adobe
+    ],
 }
 
 # Human-readable color descriptions keyed by hex value, used for prompt
@@ -63,6 +73,14 @@ _COLOR_NAMES: dict[str, str] = {
     "#8A8A8A": "medium gray",
     "#C0C0C0": "silver",
     "#F0F0F0": "near white",
+    "#F5E6C8": "warm sand",
+    "#D4956A": "terracotta",
+    "#A8B88C": "sage green",
+    "#6BBFB0": "turquoise accent",
+    "#C1713A": "sienna",
+    "#FAF0DE": "cream",
+    "#8B6F5E": "desert stone",
+    "#E8C9A0": "light adobe",
 }
 
 # LAB distance threshold: pixels farther than this from every palette color

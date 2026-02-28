@@ -50,6 +50,16 @@ class Landmark(BaseModel):
         description="Render on horizon line as silhouette",
     )
 
+    # Wikipedia/Wikidata metadata
+    wikipedia_url: Optional[str] = Field(
+        default=None,
+        description="Wikipedia article URL",
+    )
+    wikidata_id: Optional[str] = Field(
+        default=None,
+        description="Wikidata entity ID (e.g., Q12345)",
+    )
+
     # Display settings
     scale: float = Field(
         default=1.5,

@@ -1,7 +1,7 @@
 """OpenStreetMap data extraction service."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import geopandas as gpd
 import osmnx as ox
@@ -21,6 +21,7 @@ class OSMData:
     terrain_types: Optional[gpd.GeoDataFrame] = None
     railways: Optional[gpd.GeoDataFrame] = None
     pois: Optional[gpd.GeoDataFrame] = None
+    washes: Optional[gpd.GeoDataFrame] = None
 
     def has_data(self) -> bool:
         """Check if any data was extracted."""
@@ -32,6 +33,7 @@ class OSMData:
                 self.water,
                 self.parks,
                 self.terrain_types,
+                self.washes,
             ]
         )
 
@@ -88,6 +90,7 @@ class OSMService:
         self,
         bbox: BoundingBox,
         detail_level: str = "full",
+        progress_callback: Optional[Callable] = None,
     ) -> OSMData:
         """
         Fetch OSM data for a region.
@@ -104,55 +107,63 @@ class OSMService:
             OSMData containing extracted layers
         """
         if detail_level == "simplified":
-            return self.fetch_simplified_region_data(bbox)
+            return self.fetch_simplified_region_data(bbox, progress_callback=progress_callback)
         elif detail_level == "regional":
-            return self.fetch_regional_region_data(bbox)
+            return self.fetch_regional_region_data(bbox, progress_callback=progress_callback)
         elif detail_level == "country":
-            return self.fetch_country_region_data(bbox)
+            return self.fetch_country_region_data(bbox, progress_callback=progress_callback)
 
         # Full detail level with verbose logging
         import sys
         data = OSMData()
 
-        print("  [OSM] Fetching all roads...", end=" ", flush=True)
-        sys.stdout.flush()
+        def _report(label: str, step: int, total: int = 8):
+            print(f"  [OSM] {label}...", end=" ", flush=True)
+            sys.stdout.flush()
+            if progress_callback:
+                progress_callback(label, step, total)
+
+        _report("Fetching all roads", 1)
         data.roads = self.extract_roads(bbox)
         road_count = len(data.roads) if data.roads is not None else 0
         print(f"({road_count} features)")
 
-        print("  [OSM] Fetching all buildings...", end=" ", flush=True)
-        sys.stdout.flush()
+        _report("Fetching all buildings", 2)
         data.buildings = self.extract_buildings(bbox)
         building_count = len(data.buildings) if data.buildings is not None else 0
         print(f"({building_count} features)")
 
-        print("  [OSM] Fetching water...", end=" ", flush=True)
-        sys.stdout.flush()
+        _report("Fetching water", 3)
         data.water = self.extract_water(bbox)
         water_count = len(data.water) if data.water is not None else 0
         print(f"({water_count} features)")
 
-        print("  [OSM] Fetching parks...", end=" ", flush=True)
-        sys.stdout.flush()
+        _report("Fetching parks", 4)
         data.parks = self.extract_parks(bbox)
         park_count = len(data.parks) if data.parks is not None else 0
         print(f"({park_count} features)")
 
-        print("  [OSM] Fetching terrain types...", end=" ", flush=True)
-        sys.stdout.flush()
+        _report("Fetching terrain types", 5)
         data.terrain_types = self.extract_terrain_types(bbox)
         terrain_count = len(data.terrain_types) if data.terrain_types is not None else 0
         print(f"({terrain_count} features)")
 
-        print("  [OSM] Fetching railways...", end=" ", flush=True)
-        sys.stdout.flush()
+        _report("Fetching railways", 6)
         data.railways = self.extract_railways(bbox)
         railway_count = len(data.railways) if data.railways is not None else 0
         print(f"({railway_count} features)")
 
+        _report("Fetching washes/arroyos", 7)
+        data.washes = self.extract_washes(bbox)
+        wash_count = len(data.washes) if data.washes is not None else 0
+        print(f"({wash_count} features)")
+
+        if progress_callback:
+            progress_callback("OSM data complete", 8, 8)
+
         return data
 
-    def fetch_simplified_region_data(self, bbox: BoundingBox, verbose: bool = True) -> OSMData:
+    def fetch_simplified_region_data(self, bbox: BoundingBox, verbose: bool = True, progress_callback: Optional[Callable] = None) -> OSMData:
         """
         Fetch simplified OSM data - major features only for illustrated maps.
 
@@ -206,9 +217,17 @@ class OSMService:
 
         # Skip railways and detailed terrain for simplified mode
 
+        if verbose:
+            print("  [OSM] Fetching washes/arroyos...", end=" ", flush=True)
+            sys.stdout.flush()
+        data.washes = self.extract_washes(bbox)
+        if verbose:
+            wash_count = len(data.washes) if data.washes is not None else 0
+            print(f"({wash_count} features)")
+
         return data
 
-    def fetch_regional_region_data(self, bbox: BoundingBox) -> OSMData:
+    def fetch_regional_region_data(self, bbox: BoundingBox, progress_callback: Optional[Callable] = None) -> OSMData:
         """
         Fetch regional OSM data - primary roads and landmarks only.
 
@@ -253,9 +272,15 @@ class OSMService:
         park_count = len(data.parks) if data.parks is not None else 0
         print(f"({park_count} features)")
 
+        print("  [OSM] Fetching washes/arroyos...", end=" ", flush=True)
+        sys.stdout.flush()
+        data.washes = self.extract_washes(bbox)
+        wash_count = len(data.washes) if data.washes is not None else 0
+        print(f"({wash_count} features)")
+
         return data
 
-    def fetch_country_region_data(self, bbox: BoundingBox) -> OSMData:
+    def fetch_country_region_data(self, bbox: BoundingBox, progress_callback: Optional[Callable] = None) -> OSMData:
         """
         Fetch country-level OSM data - motorways and major cities only.
 
@@ -322,6 +347,10 @@ class OSMService:
             # Add road classification
             edges["road_class"] = edges["highway"].apply(self._classify_road)
 
+            # Normalize ref tags for highway shields
+            if "ref" in edges.columns:
+                edges["ref_normalized"] = edges["ref"].apply(self._normalize_ref)
+
             return edges
 
         except Exception as e:
@@ -368,6 +397,10 @@ class OSMService:
             # Add road classification
             edges["road_class"] = edges["highway"].apply(self._classify_road)
 
+            # Normalize ref tags for highway shields
+            if "ref" in edges.columns:
+                edges["ref_normalized"] = edges["ref"].apply(self._normalize_ref)
+
             return edges
 
         except Exception as e:
@@ -409,6 +442,10 @@ class OSMService:
             edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
             edges["road_class"] = edges["highway"].apply(self._classify_road)
 
+            # Normalize ref tags for highway shields
+            if "ref" in edges.columns:
+                edges["ref_normalized"] = edges["ref"].apply(self._normalize_ref)
+
             return edges
 
         except Exception as e:
@@ -445,6 +482,34 @@ class OSMService:
         except Exception as e:
             print(f"Warning: Could not extract motorways: {e}")
             return None
+
+    @staticmethod
+    def _normalize_ref(ref_value) -> Optional[str]:
+        """Normalize a road ref tag value.
+
+        OSMnx sometimes returns ref as a list; this extracts the first element
+        and returns it as a string.
+
+        Args:
+            ref_value: Raw ref value from OSM (str, list, or NaN)
+
+        Returns:
+            Normalized ref string, or None
+        """
+        if ref_value is None:
+            return None
+        if isinstance(ref_value, list):
+            return str(ref_value[0]) if ref_value else None
+        if isinstance(ref_value, str):
+            return ref_value
+        # Handle NaN/float values
+        try:
+            import math
+            if math.isnan(ref_value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return str(ref_value)
 
     def _classify_road(self, highway_type) -> str:
         """Classify road type for rendering."""
@@ -918,6 +983,71 @@ class OSMService:
 
         except Exception as e:
             print(f"Warning: Could not extract railways: {e}")
+            return None
+
+    def extract_washes(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract dry washes, arroyos, canals, and intermittent waterways from OSM.
+
+        These are critical features in desert landscapes (e.g., Arizona) that
+        are not captured by the standard water extraction.
+
+        Args:
+            bbox: Bounding box
+
+        Returns:
+            GeoDataFrame with wash/arroyo geometries and a 'wash_type' column
+        """
+        try:
+            # Query for desert waterway types
+            wash_tags = {
+                "waterway": ["ditch", "drain", "wadi", "canal"],
+            }
+            washes = ox.features_from_bbox(
+                bbox=bbox.to_osmnx_bbox(),
+                tags=wash_tags,
+            )
+
+            # Also query for intermittent waterways
+            try:
+                intermittent = ox.features_from_bbox(
+                    bbox=bbox.to_osmnx_bbox(),
+                    tags={"intermittent": ["yes"]},
+                )
+                if intermittent is not None and len(intermittent) > 0:
+                    import pandas as pd
+                    washes = pd.concat([washes, intermittent]).drop_duplicates(
+                        subset="geometry"
+                    )
+            except Exception:
+                pass  # Intermittent query may fail; that's fine
+
+            if washes is None or len(washes) == 0:
+                return None
+
+            washes = washes.copy()
+
+            # Classify wash subtypes
+            def _classify_wash(row):
+                ww = row.get("waterway", "")
+                if isinstance(ww, list):
+                    ww = ww[0] if ww else ""
+                if ww == "wadi":
+                    return "arroyo"
+                elif ww == "canal":
+                    return "canal"
+                elif ww in ("ditch", "drain"):
+                    return "ditch"
+                elif row.get("intermittent") == "yes":
+                    return "intermittent"
+                return "wash"
+
+            washes["wash_type"] = washes.apply(_classify_wash, axis=1)
+
+            return washes
+
+        except Exception as e:
+            print(f"Warning: Could not extract washes: {e}")
             return None
 
     def get_city_boundary(self, city_name: str) -> Optional[Polygon]:

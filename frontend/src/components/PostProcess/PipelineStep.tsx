@@ -9,6 +9,7 @@ interface PipelineStepProps {
   available: boolean;
   onRun: () => void;
   error?: string | null;
+  children?: React.ReactNode;
 }
 
 export default function PipelineStep({
@@ -20,6 +21,7 @@ export default function PipelineStep({
   available,
   onRun,
   error,
+  children,
 }: PipelineStepProps) {
   const thumbnailUrl = done ? api.getPostProcessImageUrl(projectName, stage, 256) : null;
 
@@ -50,6 +52,12 @@ export default function PipelineStep({
           {running ? 'Running...' : done ? 'Re-run' : 'Run'}
         </button>
       </div>
+
+      {children && (
+        <div className="px-4 pb-2">
+          {children}
+        </div>
+      )}
 
       {error && (
         <div className="px-4 pb-3">

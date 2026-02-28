@@ -145,7 +145,7 @@ async def generation_websocket(websocket: WebSocket, task_id: str):
 
 def _progress_to_dict(progress) -> dict:
     """Convert GenerationProgress to dict for JSON serialization."""
-    return {
+    result = {
         "status": "running",
         "total_tiles": progress.total_tiles,
         "completed_tiles": progress.completed_tiles,
@@ -154,6 +154,14 @@ def _progress_to_dict(progress) -> dict:
         "elapsed_seconds": progress.elapsed_time,
         "estimated_remaining_seconds": progress.estimated_remaining if progress.completed_tiles > 0 else None,
     }
+    # Include phase fields if available
+    if hasattr(progress, "phase"):
+        result["phase"] = progress.phase
+    if hasattr(progress, "phase_detail"):
+        result["phase_detail"] = progress.phase_detail
+    if hasattr(progress, "phase_progress"):
+        result["phase_progress"] = list(progress.phase_progress) if progress.phase_progress else None
+    return result
 
 
 @router.websocket("/ws/project/{project_name}")

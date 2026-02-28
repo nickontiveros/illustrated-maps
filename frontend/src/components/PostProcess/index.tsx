@@ -28,6 +28,7 @@ export default function PostProcess({ projectName }: PostProcessProps) {
   const [pipelineSteps, setPipelineSteps] = useState<Set<string>>(
     new Set(['compose', 'labels', 'border'])
   );
+  const [includeShields, setIncludeShields] = useState(true);
 
   if (isLoading) {
     return (
@@ -59,7 +60,7 @@ export default function PostProcess({ projectName }: PostProcessProps) {
       pipelineSteps.has(s)
     );
     if (orderedSteps.length > 0) {
-      pipeline.mutate(orderedSteps);
+      pipeline.mutate({ steps: orderedSteps, includeShields });
     }
   };
 
@@ -146,9 +147,19 @@ export default function PostProcess({ projectName }: PostProcessProps) {
           done={status.labeled}
           running={labels.isPending}
           available={status.assembled}
-          onRun={() => labels.mutate()}
+          onRun={() => labels.mutate(includeShields)}
           error={labels.error?.message}
-        />
+        >
+          <label className="flex items-center gap-2 text-xs text-slate-500 mt-1">
+            <input
+              type="checkbox"
+              checked={includeShields}
+              onChange={(e) => setIncludeShields(e.target.checked)}
+              className="rounded"
+            />
+            Highway Shields
+          </label>
+        </PipelineStep>
 
         <div className="flex items-center justify-center">
           <span className="text-slate-300 text-xs">↓</span>

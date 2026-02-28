@@ -73,6 +73,69 @@ class GeminiService:
         ),
     }
 
+    # Terrain-specific prompt modifiers appended when terrain is detected
+    TERRAIN_PROMPT_MODIFIERS = {
+        "desert": (
+            "\n\nDesert terrain style: Render the landscape with Sonoran Desert characteristics. "
+            "Include saguaro cacti silhouettes, dry sandy washes, mesas and buttes on the horizon, "
+            "red-brown rocky outcrops, sparse creosote bush and palo verde trees. "
+            "Use sun-washed warm tones — sand, terracotta, sienna, light adobe. "
+            "DO NOT include: snow, dense forest, lush green meadows, or heavy rainfall features."
+        ),
+        "mountain": (
+            "\n\nMountain terrain style: Emphasize elevation changes with dramatic shading. "
+            "Show rocky peaks, ridgelines, and canyon walls. Use shadow and highlight to convey "
+            "three-dimensional relief. Include subtle contour-like shading on slopes."
+        ),
+        "flat": (
+            "\n\nFlat terrain style: Use subtle color gradients and texture variation to convey "
+            "the open expanse. Avoid dramatic relief shading. Show gentle terrain through "
+            "color shifts rather than sharp elevation features."
+        ),
+    }
+
+    @staticmethod
+    def detect_terrain_modifier(terrain_description: str) -> str:
+        """Detect the appropriate terrain prompt modifier from a terrain description.
+
+        Args:
+            terrain_description: Text description from TerrainService.get_terrain_description()
+
+        Returns:
+            The matching modifier string, or empty string if no match.
+        """
+        if not terrain_description:
+            return ""
+
+        desc_lower = terrain_description.lower()
+
+        # Desert detection: keywords or low-elevation arid characteristics
+        desert_keywords = ["desert", "sand", "arid", "dune"]
+        if any(kw in desc_lower for kw in desert_keywords):
+            return GeminiService.TERRAIN_PROMPT_MODIFIERS["desert"]
+
+        # Mountain detection
+        mountain_keywords = ["mountainous", "steep slopes", "significant elevation"]
+        if any(kw in desc_lower for kw in mountain_keywords):
+            return GeminiService.TERRAIN_PROMPT_MODIFIERS["mountain"]
+
+        # Flat terrain detection
+        flat_keywords = ["flat terrain", "relatively flat", "mostly level"]
+        if any(kw in desc_lower for kw in flat_keywords):
+            return GeminiService.TERRAIN_PROMPT_MODIFIERS["flat"]
+
+        # Desert-range elevation heuristic: 300-600m with gentle terrain in arid zones
+        import re
+        elev_match = re.search(r'(\d+)m to (\d+)m', terrain_description)
+        if elev_match:
+            min_elev = int(elev_match.group(1))
+            max_elev = int(elev_match.group(2))
+            if 200 <= min_elev <= 800 and max_elev - min_elev < 500:
+                if "hilly" in desc_lower or "gently" in desc_lower or "level" in desc_lower:
+                    return GeminiService.TERRAIN_PROMPT_MODIFIERS["desert"]
+
+        return ""
+
     # Model configurations
     MODELS = {
         "gemini-3-pro-image-preview": {
@@ -159,6 +222,9 @@ class GeminiService:
 
         if terrain_description:
             prompt += f"\n\nTerrain characteristics: {terrain_description}"
+            modifier = self.detect_terrain_modifier(terrain_description)
+            if modifier:
+                prompt += modifier
 
         if tile_position:
             prompt += f"\n\nThis is the {tile_position} section of the map."

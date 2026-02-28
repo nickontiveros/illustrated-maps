@@ -4,7 +4,7 @@ import math
 import os
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 from PIL import Image
@@ -51,6 +51,7 @@ class SatelliteService:
         bbox: BoundingBox,
         zoom: Optional[int] = None,
         output_size: Optional[tuple[int, int]] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> Image.Image:
         """
         Fetch satellite imagery for a bounding box.
@@ -71,7 +72,7 @@ class SatelliteService:
         tiles = self._get_tiles_for_bbox(bbox, zoom)
 
         # Download and stitch tiles
-        stitched = self._download_and_stitch_tiles(tiles, zoom)
+        stitched = self._download_and_stitch_tiles(tiles, zoom, progress_callback=progress_callback)
 
         # Crop to exact bbox
         cropped = self._crop_to_bbox(stitched, bbox, zoom)
@@ -208,6 +209,7 @@ class SatelliteService:
         self,
         tiles: list[tuple[int, int]],
         zoom: int,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> Image.Image:
         """
         Download multiple tiles and stitch them together.
@@ -245,7 +247,8 @@ class SatelliteService:
         stitched.paste(first_tile, (px, py))
 
         # Download and paste remaining tiles
-        for x, y in tiles[1:]:
+        total_tiles = len(tiles)
+        for i, (x, y) in enumerate(tiles[1:], start=2):
             tile = self._download_tile(x, y, zoom)
 
             # Calculate position in output
@@ -253,6 +256,9 @@ class SatelliteService:
             py = (y - min_y) * tile_pixel_size
 
             stitched.paste(tile, (px, py))
+
+            if progress_callback:
+                progress_callback(i, total_tiles)
 
         # Store tile bounds for cropping
         self._last_tile_bounds = (min_x, min_y, max_x, max_y)

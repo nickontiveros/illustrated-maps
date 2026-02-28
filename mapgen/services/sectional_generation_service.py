@@ -374,17 +374,36 @@ class SectionalGenerationService:
                 include_terrain_shading=config.include_terrain_shading,
             )
 
+            # Fetch terrain description for fill region
+            terrain_description = None
+            try:
+                terrain_svc = self.generation_service.terrain
+                elev_data = terrain_svc.fetch_elevation_data(config.bbox)
+                terrain_description = terrain_svc.get_terrain_description(elev_data)
+            except Exception:
+                pass  # Terrain fetch failures don't block generation
+
             # Optional AI illustration pass
             if config.use_ai_illustration and image is not None:
-                prompt = config.prompt_override or (
-                    "Transform this desert map into a hand illustrated style. "
-                    "Warm sand tones, stylized highways, subtle terrain texture. "
-                    "Hand-painted aesthetic matching a tourist map."
-                )
+                if config.prompt_override:
+                    prompt = config.prompt_override
+                else:
+                    # Build terrain-aware fill prompt
+                    prompt = (
+                        "Transform this desert map into a hand illustrated style. "
+                        "Warm sand tones, stylized highways, subtle terrain texture. "
+                        "Hand-painted aesthetic matching a tourist map."
+                    )
+                    if terrain_description:
+                        from .gemini_service import GeminiService
+                        modifier = GeminiService.detect_terrain_modifier(terrain_description)
+                        if modifier:
+                            prompt += modifier
                 try:
                     gen_result = self.generation_service.gemini.generate_base_tile(
                         reference_image=image,
                         style_prompt=prompt,
+                        terrain_description=terrain_description,
                         tile_position="desert fill region",
                     )
                     image = gen_result.image

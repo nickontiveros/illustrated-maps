@@ -24,6 +24,7 @@ from .perspective_service import PerspectiveService
 from .render_service import RenderService
 from .road_style_service import RoadStyleService
 from .satellite_service import SatelliteService
+from .terrain_service import TerrainService
 
 # Area threshold for per-tile OSM fetching (in km²)
 PER_TILE_OSM_THRESHOLD = 10_000
@@ -79,6 +80,9 @@ class GenerationProgress:
     current_tile: Optional[TileSpec] = None
     start_time: float = field(default_factory=time.time)
     tile_times: list[float] = field(default_factory=list)
+    phase: str = "generating_tiles"  # fetching_osm | fetching_satellite | generating_tiles | assembling
+    phase_detail: Optional[str] = None  # e.g., "Fetching roads... (2/7)"
+    phase_progress: Optional[tuple[int, int]] = None  # (current_step, total_steps) within phase
 
     @property
     def elapsed_time(self) -> float:
@@ -135,6 +139,9 @@ class GenerationService:
         self._satellite = satellite_service
         self._osm = osm_service
         self._blending = BlendingService()
+
+        # Terrain service (lazy-initialized)
+        self._terrain: Optional[TerrainService] = None
 
         # Cache for OSM data (for small regions, fetched once; for large regions, per-tile)
         self._osm_data: Optional[OSMData] = None
@@ -193,6 +200,13 @@ class GenerationService:
             cache_path = str(self.cache_dir / "osm") if self.cache_dir else None
             self._osm = OSMService(cache_dir=cache_path)
         return self._osm
+
+    @property
+    def terrain(self) -> TerrainService:
+        if self._terrain is None:
+            cache_path = str(self.cache_dir / "terrain") if self.cache_dir else None
+            self._terrain = TerrainService(cache_dir=cache_path)
+        return self._terrain
 
     def _apply_orientation_rotation(self, image: Image.Image) -> Image.Image:
         """Apply rotation based on map orientation setting.
@@ -311,7 +325,7 @@ class GenerationService:
         else:
             return f"{v_pos}-{h_pos} corner"
 
-    def fetch_osm_data(self, tile_bbox: Optional[BoundingBox] = None) -> OSMData:
+    def fetch_osm_data(self, tile_bbox: Optional[BoundingBox] = None, progress_callback: Optional[Callable] = None) -> OSMData:
         """
         Fetch and cache OSM data for the region or tile.
 
@@ -320,6 +334,7 @@ class GenerationService:
 
         Args:
             tile_bbox: Optional tile bounding box for per-tile fetching
+            progress_callback: Optional callback for progress updates
 
         Returns:
             OSMData for the region or tile
@@ -334,6 +349,7 @@ class GenerationService:
                 self._osm_data = self.osm.fetch_region_data(
                     self.project.region,
                     detail_level=self._detail_level.value,
+                    progress_callback=progress_callback,
                 )
             return self._osm_data
 
@@ -567,12 +583,24 @@ class GenerationService:
             ref_path.parent.mkdir(parents=True, exist_ok=True)
             result.reference_image.save(ref_path)
 
+        # Fetch terrain description for this tile
+        terrain_description = None
+        try:
+            elev_data = self.terrain.fetch_elevation_data(spec.bbox)
+            terrain_description = self.terrain.get_terrain_description(elev_data)
+            if progress_callback:
+                progress_callback(f"Terrain: {terrain_description[:80]}")
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Terrain fetch skipped: {e}")
+
         # Detect if this is a water-only tile and select appropriate prompt
         is_water = self._is_water_tile(result.reference_image)
         if is_water:
             if progress_callback:
                 progress_callback("Detected water tile, using water prompt")
             prompt = WATER_TILE_PROMPT
+            terrain_description = None  # No terrain for water tiles
         else:
             prompt = style_prompt or self.project.style.prompt
         last_error = None
@@ -587,6 +615,7 @@ class GenerationService:
                 gen_result = self.gemini.generate_base_tile(
                     reference_image=result.reference_image,
                     style_prompt=prompt,
+                    terrain_description=terrain_description,
                     tile_position=spec.position_desc,
                     style_reference=style_reference,
                 )
@@ -641,7 +670,24 @@ class GenerationService:
 
         # Pre-fetch OSM data for small regions (large regions use per-tile fetching)
         if not self._use_per_tile_osm:
-            self.fetch_osm_data()
+            progress.phase = "fetching_osm"
+            progress.phase_detail = "Loading map data..."
+            if progress_callback:
+                progress_callback(progress)
+
+            def osm_progress(label: str, step: int, total: int):
+                progress.phase_detail = f"{label}... ({step}/{total})"
+                progress.phase_progress = (step, total)
+                if progress_callback:
+                    progress_callback(progress)
+
+            self.fetch_osm_data(progress_callback=osm_progress)
+
+        progress.phase = "generating_tiles"
+        progress.phase_detail = None
+        progress.phase_progress = None
+        if progress_callback:
+            progress_callback(progress)
 
         # If no style reference provided, generate the central tile first and use it
         current_style_ref = style_reference

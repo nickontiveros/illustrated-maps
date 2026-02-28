@@ -352,12 +352,31 @@ class LandmarkDiscoveryService:
         tier = self._assign_tier(score)
         scale = TIER_SCALES[tier]
 
+        # -- Wikipedia / Wikidata --
+        wikipedia_url = None
+        wikidata_id = None
+
+        wiki_raw = self._safe_get(row, "wikipedia")
+        if isinstance(wiki_raw, str) and wiki_raw:
+            # OSM stores as "en:Article_Name" or full URL
+            if wiki_raw.startswith("http"):
+                wikipedia_url = wiki_raw
+            elif ":" in wiki_raw:
+                lang, title = wiki_raw.split(":", 1)
+                wikipedia_url = f"https://{lang}.wikipedia.org/wiki/{title}"
+
+        wd_raw = self._safe_get(row, "wikidata")
+        if isinstance(wd_raw, str) and wd_raw.startswith("Q"):
+            wikidata_id = wd_raw
+
         return Landmark(
             name=name,
             latitude=latitude,
             longitude=longitude,
             feature_type=feature_type,
             scale=scale,
+            wikipedia_url=wikipedia_url,
+            wikidata_id=wikidata_id,
         )
 
     def _determine_feature_type(self, row) -> FeatureType:

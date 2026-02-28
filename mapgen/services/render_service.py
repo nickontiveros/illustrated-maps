@@ -52,6 +52,9 @@ class RenderService:
         # Desert/sand
         "desert": "#F4E4B8",
         "sand": "#FAF0D0",
+        # Washes/arroyos
+        "wash": "#C4B89C",
+        "wash_outline": "#B0A080",
     }
 
     # Line widths for different road types (in points)
@@ -131,6 +134,13 @@ class RenderService:
             if apply_perspective:
                 water = self.perspective.transform_geodataframe(water, bbox, elev_array)
             self._render_water(ax, water)
+
+        # 2b. Washes/arroyos (between water and parks)
+        if osm_data.washes is not None:
+            washes = osm_data.washes
+            if apply_perspective:
+                washes = self.perspective.transform_geodataframe(washes, bbox, elev_array)
+            self._render_washes(ax, washes)
 
         # 3. Parks
         if osm_data.parks is not None:
@@ -269,6 +279,46 @@ class RenderService:
             elif geom.geom_type in ["LineString", "MultiLineString"]:
                 self._render_linestring(
                     ax, geom, color=color, linewidth=2 * scale_factor
+                )
+
+    def _render_washes(
+        self, ax, washes: gpd.GeoDataFrame, scale_factor: float = 1.0
+    ) -> None:
+        """Render dry washes, arroyos, and canals as dashed lines.
+
+        Args:
+            ax: Matplotlib axes.
+            washes: GeoDataFrame with wash features.
+            scale_factor: Multiplier for line widths (increase for regional scale).
+        """
+        if len(washes) == 0:
+            return
+
+        for idx, row in washes.iterrows():
+            geom = row.geometry
+            if geom is None or geom.is_empty:
+                continue
+
+            wash_type = row.get("wash_type", "wash")
+            color = self.COLORS["wash"]
+            outline_color = self.COLORS["wash_outline"]
+
+            # Canals get slightly thicker lines
+            width = 1.5 * scale_factor if wash_type == "canal" else 1.0 * scale_factor
+
+            if geom.geom_type in ["LineString", "MultiLineString"]:
+                self._render_linestring(
+                    ax, geom, color=outline_color, linewidth=width + 0.5,
+                    linestyle="--",
+                )
+                self._render_linestring(
+                    ax, geom, color=color, linewidth=width,
+                    linestyle="--",
+                )
+            elif geom.geom_type in ["Polygon", "MultiPolygon"]:
+                self._render_polygon(
+                    ax, geom, facecolor=color, edgecolor=outline_color,
+                    linewidth=0.5, alpha=0.6,
                 )
 
     def _render_parks(self, ax, parks: gpd.GeoDataFrame) -> None:
@@ -513,6 +563,10 @@ class RenderService:
         # Rivers and water
         if include_rivers and osm_data.water is not None and len(osm_data.water) > 0:
             self._render_water(ax, osm_data.water, scale_factor=5.0)
+
+        # Washes/arroyos (prominent in desert landscapes)
+        if osm_data.washes is not None and len(osm_data.washes) > 0:
+            self._render_washes(ax, osm_data.washes, scale_factor=3.0)
 
         # Highways (thick lines for visibility at regional scale)
         if include_highways and osm_data.roads is not None and len(osm_data.roads) > 0:

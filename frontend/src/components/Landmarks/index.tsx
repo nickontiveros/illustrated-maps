@@ -7,6 +7,7 @@ import {
   useIllustrateLandmark,
   useIllustrateAllLandmarks,
   useDiscoverLandmarks,
+  useFetchWikipediaPhoto,
 } from '@/hooks/useLandmarks';
 import { useAppStore } from '@/stores/appStore';
 import { api } from '@/api/client';
@@ -183,6 +184,7 @@ function LandmarkDetails({ landmark, projectName }: LandmarkDetailsProps) {
   const updateLandmark = useUpdateLandmark(projectName);
   const deleteLandmark = useDeleteLandmark(projectName);
   const illustrateLandmark = useIllustrateLandmark(projectName);
+  const fetchWikipediaPhoto = useFetchWikipediaPhoto(projectName);
   const { setSelectedLandmark } = useAppStore();
 
   const [scale, setScale] = useState(landmark.scale);
@@ -220,6 +222,38 @@ function LandmarkDetails({ landmark, projectName }: LandmarkDetailsProps) {
       <div className="text-sm text-slate-500">
         {landmark.latitude.toFixed(6)}°, {landmark.longitude.toFixed(6)}°
       </div>
+
+      {/* Wikipedia / Wikidata info */}
+      {(landmark.wikipedia_url || landmark.wikidata_id) && (
+        <div className="text-sm space-y-1">
+          {landmark.wikipedia_url && (
+            <div>
+              <a
+                href={landmark.wikipedia_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 hover:underline"
+              >
+                Wikipedia
+              </a>
+            </div>
+          )}
+          {landmark.wikidata_id && (
+            <div className="text-slate-500">Wikidata: {landmark.wikidata_id}</div>
+          )}
+        </div>
+      )}
+
+      {/* Fetch Wikipedia photo */}
+      {!landmark.has_photo && (landmark.wikipedia_url || landmark.wikidata_id) && (
+        <button
+          onClick={() => fetchWikipediaPhoto.mutate(landmark.name)}
+          disabled={fetchWikipediaPhoto.isPending}
+          className="w-full px-4 py-2 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50"
+        >
+          {fetchWikipediaPhoto.isPending ? 'Fetching...' : 'Fetch Photo from Wikipedia'}
+        </button>
+      )}
 
       {/* Scale slider */}
       <div>
@@ -316,6 +350,8 @@ function AddLandmarkModal({ projectName, onClose }: AddLandmarkModalProps) {
     latitude: 0,
     longitude: 0,
     scale: 1.5,
+    wikipedia_url: '',
+    wikidata_id: '',
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -323,7 +359,15 @@ function AddLandmarkModal({ projectName, onClose }: AddLandmarkModalProps) {
     if (!formData.name.trim()) return;
 
     try {
-      await createLandmark.mutateAsync(formData);
+      const payload: Record<string, unknown> = {
+        name: formData.name,
+        latitude: formData.latitude,
+        longitude: formData.longitude,
+        scale: formData.scale,
+      };
+      if (formData.wikipedia_url.trim()) payload.wikipedia_url = formData.wikipedia_url.trim();
+      if (formData.wikidata_id.trim()) payload.wikidata_id = formData.wikidata_id.trim();
+      await createLandmark.mutateAsync(payload as Parameters<typeof createLandmark.mutateAsync>[0]);
       onClose();
     } catch (error) {
       console.error('Failed to create landmark:', error);
@@ -386,6 +430,28 @@ function AddLandmarkModal({ projectName, onClose }: AddLandmarkModalProps) {
             />
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Wikipedia URL (optional)</label>
+            <input
+              type="url"
+              value={formData.wikipedia_url}
+              onChange={(e) => setFormData({ ...formData, wikipedia_url: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="https://en.wikipedia.org/wiki/..."
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Wikidata ID (optional)</label>
+            <input
+              type="text"
+              value={formData.wikidata_id}
+              onChange={(e) => setFormData({ ...formData, wikidata_id: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Q12345"
+            />
+          </div>
+
           <div className="flex justify-end gap-3 pt-2">
             <button
               type="button"
@@ -442,12 +508,15 @@ function DiscoverLandmarksModal({ projectName, discovered, onClose }: DiscoverLa
     try {
       for (const idx of Array.from(selected).sort()) {
         const lm = discovered[idx];
-        await createLandmark.mutateAsync({
+        const payload: Parameters<typeof createLandmark.mutateAsync>[0] = {
           name: lm.name,
           latitude: lm.latitude,
           longitude: lm.longitude,
           scale: lm.scale,
-        });
+        };
+        if (lm.wikipedia_url) (payload as Record<string, unknown>).wikipedia_url = lm.wikipedia_url;
+        if (lm.wikidata_id) (payload as Record<string, unknown>).wikidata_id = lm.wikidata_id;
+        await createLandmark.mutateAsync(payload);
       }
       onClose();
     } catch (error) {
@@ -499,6 +568,7 @@ function DiscoverLandmarksModal({ projectName, discovered, onClose }: DiscoverLa
                 <th className="px-4 py-2 text-left text-slate-600">Name</th>
                 <th className="px-4 py-2 text-left text-slate-600">Scale</th>
                 <th className="px-4 py-2 text-left text-slate-600">Location</th>
+                <th className="px-4 py-2 text-left text-slate-600">Wiki</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -518,6 +588,20 @@ function DiscoverLandmarksModal({ projectName, discovered, onClose }: DiscoverLa
                   <td className="px-4 py-2 text-slate-600">{lm.scale.toFixed(1)}x</td>
                   <td className="px-4 py-2 text-slate-500">
                     {lm.latitude.toFixed(4)}, {lm.longitude.toFixed(4)}
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex gap-1">
+                      {lm.wikipedia_url && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
+                          W
+                        </span>
+                      )}
+                      {lm.wikidata_id && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-purple-100 text-purple-700">
+                          QD
+                        </span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

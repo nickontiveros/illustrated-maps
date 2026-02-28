@@ -250,6 +250,8 @@ class LandmarkCreate(BaseModel):
     path_coordinates: Optional[list[tuple[float, float]]] = None
     elevation_meters: Optional[float] = None
     horizon_feature: bool = False
+    wikipedia_url: Optional[str] = None
+    wikidata_id: Optional[str] = None
 
 
 class LandmarkUpdate(BaseModel):
@@ -260,6 +262,8 @@ class LandmarkUpdate(BaseModel):
     scale: Optional[float] = Field(None, ge=0.5, le=5.0)
     z_index: Optional[int] = None
     rotation: Optional[float] = Field(None, ge=-180, le=180)
+    wikipedia_url: Optional[str] = None
+    wikidata_id: Optional[str] = None
 
 
 class LandmarkDetail(BaseModel):
@@ -277,6 +281,8 @@ class LandmarkDetail(BaseModel):
     path_coordinates: Optional[list[tuple[float, float]]] = None
     elevation_meters: Optional[float] = None
     horizon_feature: bool = False
+    wikipedia_url: Optional[str] = None
+    wikidata_id: Optional[str] = None
     illustrated_path: Optional[str] = None
     pixel_position: Optional[tuple[int, int]] = None
     has_photo: bool = False
@@ -309,6 +315,8 @@ class LandmarkDetail(BaseModel):
             path_coordinates=landmark.path_coordinates,
             elevation_meters=landmark.elevation_meters,
             horizon_feature=landmark.horizon_feature,
+            wikipedia_url=landmark.wikipedia_url,
+            wikidata_id=landmark.wikidata_id,
             illustrated_path=landmark.illustrated_path,
             pixel_position=landmark.pixel_position,
             has_photo=has_photo,
@@ -354,6 +362,9 @@ class GenerationProgress(BaseModel):
     elapsed_seconds: float = 0.0
     estimated_remaining_seconds: Optional[float] = None
     error: Optional[str] = None
+    phase: Optional[str] = None  # fetching_osm | fetching_satellite | generating_tiles | assembling
+    phase_detail: Optional[str] = None  # e.g., "Fetching roads... (2/7)"
+    phase_progress: Optional[tuple[int, int]] = None  # (current_step, total_steps) within phase
 
 
 class GenerationStartRequest(BaseModel):
@@ -436,6 +447,12 @@ class PostProcessStatus(BaseModel):
     latest_stage: Optional[str] = None
 
 
+class LabelsRequest(BaseModel):
+    """Request to add labels (optionally with highway shields)."""
+
+    include_shields: bool = Field(default=True, description="Include highway route shields")
+
+
 class PipelineRequest(BaseModel):
     """Request to run the post-processing pipeline."""
 
@@ -443,6 +460,7 @@ class PipelineRequest(BaseModel):
         ...,
         description="Steps to run in order: compose, labels, border, outpaint",
     )
+    include_shields: bool = Field(default=True, description="Include highway shields in labels step")
 
 
 # =============================================================================

@@ -202,6 +202,8 @@ export interface Landmark {
   rotation: number;
   illustrated_path: string | null;
   pixel_position: [number, number] | null;
+  wikipedia_url?: string;
+  wikidata_id?: string;
 }
 
 export interface LandmarkDetail extends Landmark {
@@ -221,6 +223,9 @@ export interface GenerationProgress {
   elapsed_seconds: number;
   estimated_remaining_seconds: number | null;
   error: string | null;
+  phase?: string;
+  phase_detail?: string;
+  phase_progress?: [number, number] | null;
 }
 
 export interface GenerationStartResponse {

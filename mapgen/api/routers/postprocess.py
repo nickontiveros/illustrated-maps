@@ -20,6 +20,7 @@ from ..dependencies import APIKeys, get_api_keys, create_gemini_service
 from ..schemas import (
     GenerationStartResponse,
     GenerationStatus,
+    LabelsRequest,
     PipelineRequest,
     PostProcessStatus,
     SuccessResponse,
@@ -171,7 +172,7 @@ async def compose_landmarks(name: str):
 
 
 @router.post("/{name}/postprocess/labels", response_model=SuccessResponse)
-async def add_labels(name: str):
+async def add_labels(name: str, request: Optional[LabelsRequest] = None):
     """Render OSM typography labels onto the map."""
     project = load_project(name)
     base_image = load_stage_image(project, before_stage="labeled")
@@ -182,6 +183,7 @@ async def add_labels(name: str):
             detail="Typography is not enabled. Enable it in project settings first.",
         )
 
+    include_shields = request.include_shields if request else True
     cache_dir = get_project_cache_dir(name)
 
     def do_labels():
@@ -191,12 +193,24 @@ async def add_labels(name: str):
         osm_data = osm_service.fetch_region_data(project.region, detail_level="full")
 
         typo = TypographyService(settings=project.style.typography)
-        return typo.extract_and_render(
+        labeled = typo.extract_and_render(
             base_image,
             osm_data,
             project.region,
             rotation_degrees=project.style.orientation_degrees or 0.0,
         )
+
+        # Add highway shields
+        if include_shields and osm_data.roads is not None:
+            from ...services.highway_shield_service import HighwayShieldService
+
+            shields = HighwayShieldService.extract_shield_positions(
+                osm_data.roads, project.region, labeled.size,
+            )
+            if shields:
+                labeled = HighwayShieldService.render_shields_on_image(labeled, shields)
+
+        return labeled
 
     result = await asyncio.to_thread(do_labels)
 
@@ -359,10 +373,19 @@ async def start_pipeline(
                         osm_svc = OSMService(cache_dir=str(cache_dir / "osm"))
                         osm_data = osm_svc.fetch_region_data(project.region, detail_level="full")
                         typo = TypographyService(settings=project.style.typography)
-                        return typo.extract_and_render(
+                        labeled = typo.extract_and_render(
                             base, osm_data, project.region,
                             rotation_degrees=project.style.orientation_degrees or 0.0,
                         )
+                        # Add highway shields
+                        if request.include_shields and osm_data.roads is not None:
+                            from ...services.highway_shield_service import HighwayShieldService
+                            shields = HighwayShieldService.extract_shield_positions(
+                                osm_data.roads, project.region, labeled.size,
+                            )
+                            if shields:
+                                labeled = HighwayShieldService.render_shields_on_image(labeled, shields)
+                        return labeled
 
                     result = await asyncio.to_thread(do_labels)
                     result.save(get_stage_path(project, "labeled"))
