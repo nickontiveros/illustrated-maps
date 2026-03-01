@@ -480,6 +480,24 @@ class Project(BaseModel):
         return self.region
 
     @property
+    def canvas_size(self) -> tuple[int, int]:
+        """Canvas dimensions accounting for rotation.
+
+        For rotated regions, the canvas must be larger than the output to avoid
+        clipping after rotation. The canvas matches the generation_bbox aspect ratio.
+        """
+        rotation = self.style.effective_rotation_degrees
+        if rotation % 360 == 0:
+            return (self.output.width, self.output.height)
+
+        theta = math.radians(abs(rotation))
+        cos_t = abs(math.cos(theta))
+        sin_t = abs(math.sin(theta))
+        w = math.ceil(self.output.width * cos_t + self.output.height * sin_t)
+        h = math.ceil(self.output.width * sin_t + self.output.height * cos_t)
+        return (w, h)
+
+    @property
     def generation_bbox(self) -> BoundingBox:
         """The expanded axis-aligned bbox used for tile generation.
 

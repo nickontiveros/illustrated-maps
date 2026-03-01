@@ -255,7 +255,8 @@ class GenerationService:
         region = self.project.generation_bbox
 
         # Calculate grid dimensions
-        cols, rows = tiles.calculate_grid(output.width, output.height)
+        canvas_w, canvas_h = self.project.canvas_size
+        cols, rows = tiles.calculate_grid(canvas_w, canvas_h)
 
         # Calculate geographic step per tile
         lon_step = region.width_degrees / cols
@@ -809,27 +810,13 @@ class GenerationService:
         output_config = self.project.output
         region = self.project.generation_bbox
 
-        cols, rows = tiles_config.calculate_grid(output_config.width, output_config.height)
+        canvas_w, canvas_h = self.project.canvas_size
+        cols, rows = tiles_config.calculate_grid(canvas_w, canvas_h)
         lon_step = region.width_degrees / cols
         lat_step = region.height_degrees / rows
 
-        # For rotated regions, expand the canvas so that after rotation the
-        # output rectangle is fully covered (no black corners).
         rotation = self._rotation_degrees
         needs_rotation = rotation != 0 and rotation % 360 != 0
-        if needs_rotation and rotation % 90 != 0:
-            theta = math.radians(abs(rotation))
-            cos_t = abs(math.cos(theta))
-            sin_t = abs(math.sin(theta))
-            canvas_w = math.ceil(output_config.width * cos_t + output_config.height * sin_t)
-            canvas_h = math.ceil(output_config.width * sin_t + output_config.height * cos_t)
-        elif needs_rotation:
-            # Exact 90° multiples: canvas dims are just a transpose of output
-            canvas_w = output_config.width
-            canvas_h = output_config.height
-        else:
-            canvas_w = output_config.width
-            canvas_h = output_config.height
 
         # Each tile's contribution is one grid cell. Use uniform pixel size per cell.
         cell_w = round(canvas_w / cols)

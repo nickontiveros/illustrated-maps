@@ -116,7 +116,7 @@ async def get_tile_grid(name: str):
     )
 
     specs = service.calculate_tile_specs()
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
 
     offsets = load_tile_offsets(name)
     tiles = [service_tile_to_api_tile(spec, name, offsets) for spec in specs]
@@ -152,7 +152,7 @@ async def get_tile_info(name: str, col: int, row: int):
     """Get information about a specific tile."""
     project = load_project(name)
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     if col < 0 or col >= cols or row < 0 or row >= rows:
         raise HTTPException(status_code=404, detail=f"Tile ({col}, {row}) not found")
 
@@ -272,7 +272,7 @@ async def regenerate_tile(
     project = load_project(name)
     config = get_config()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     if col < 0 or col >= cols or row < 0 or row >= rows:
         raise HTTPException(status_code=404, detail=f"Tile ({col}, {row}) not found")
 
@@ -447,7 +447,7 @@ async def start_generation(
         )
 
     cache_dir = get_project_cache_dir(name)
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     total_tiles = cols * rows
 
     # Load style reference if available
@@ -533,9 +533,7 @@ async def get_generation_status(name: str):
         if gen_tasks:
             latest = max(gen_tasks, key=lambda t: t.created_at)
             project = load_project(name)
-            cols, rows = project.tiles.calculate_grid(
-                project.output.width, project.output.height
-            )
+            cols, rows = project.tiles.calculate_grid(*project.canvas_size)
             return ProgressSchema(
                 status=latest.status,
                 total_tiles=cols * rows,
@@ -546,7 +544,7 @@ async def get_generation_status(name: str):
 
         # No generation has been run
         project = load_project(name)
-        cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+        cols, rows = project.tiles.calculate_grid(*project.canvas_size)
         return ProgressSchema(
             status=GenerationStatus.IDLE,
             total_tiles=cols * rows,
@@ -569,7 +567,7 @@ async def get_generation_status(name: str):
         )
 
     project = load_project(name)
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     return ProgressSchema(
         status=task.status,
         total_tiles=cols * rows,

@@ -41,7 +41,9 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
           setNeedsAssembly(true);
           setError(null);
         } else {
-          throw new Error(`Failed to fetch DZI info: ${response.statusText}`);
+          const data = await response.json().catch(() => null);
+          const detail = data?.detail || response.statusText || `HTTP ${response.status}`;
+          throw new Error(`Failed to fetch DZI info: ${detail}`);
         }
         return;
       }

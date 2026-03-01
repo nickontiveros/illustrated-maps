@@ -71,7 +71,7 @@ class ProjectDetail(BaseModel):
     @classmethod
     def from_project(cls, project: Project) -> "ProjectDetail":
         """Create from a Project model."""
-        cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+        cols, rows = project.tiles.calculate_grid(*project.canvas_size)
         area = project.region.calculate_area_km2()
 
         return cls(

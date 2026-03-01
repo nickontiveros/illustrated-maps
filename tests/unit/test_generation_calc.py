@@ -29,7 +29,7 @@ class TestCalculateTileSpecs:
         specs = gen_service.calculate_tile_specs()
         tiles = gen_service.project.tiles
         output = gen_service.project.output
-        cols, rows = tiles.calculate_grid(output.width, output.height)
+        cols, rows = tiles.calculate_grid(*gen_service.project.canvas_size)
         assert len(specs) == cols * rows
 
     def test_tiles_cover_all_columns_and_rows(self, gen_service):

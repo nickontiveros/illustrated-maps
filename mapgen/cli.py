@@ -111,7 +111,7 @@ def generate(
                   f"{project.region.west:.4f}W to {project.region.east:.4f}E")
 
     # Calculate tile grid
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     total_tiles = cols * rows
 
     console.print(f"[bold]Output size:[/bold] {project.output.width} x {project.output.height} px")
@@ -264,7 +264,7 @@ def info(project_path: str):
     table.add_row("Tile Overlap", f"{project.tiles.overlap} px")
     table.add_row("Orientation", f"{project.style.orientation.value} is up")
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     table.add_row("Tile Grid", f"{cols} x {rows} = {cols * rows} tiles")
 
     console.print(table)
@@ -567,7 +567,7 @@ def test_tile(project_path: str, col: int, row: int, save_reference: bool):
     )
 
     # Show grid info
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     console.print(f"[bold]Project:[/bold] {project.name}")
     console.print(f"[bold]Tile grid:[/bold] {cols} x {rows} = {cols * rows} tiles")
     console.print(f"[bold]Testing tile:[/bold] ({col}, {row})")
@@ -694,7 +694,7 @@ def generate_tiles(
 
     # Show info
     specs = gen_service.calculate_tile_specs()
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     cost = gen_service.estimate_cost()
 
     console.print(f"[bold]Project:[/bold] {project.name}")
@@ -1038,7 +1038,7 @@ def list_seams(project_path: str):
     project = Project.from_yaml(project_file)
 
     # Calculate grid dimensions
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
 
     console.print(f"[bold]Project:[/bold] {project.name}")
     console.print(f"[bold]Tile grid:[/bold] {cols} columns x {rows} rows")
@@ -1123,7 +1123,7 @@ def repair_seam(
     project_cache = get_project_cache_dir(config, project)
 
     # Calculate grid dimensions
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
 
     # Create services
     repair_service = SeamRepairService()
@@ -1335,7 +1335,7 @@ def assemble(
 
     # Get tile specs
     specs = gen_service.calculate_tile_specs()
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
 
     console.print(f"[bold]Project:[/bold] {project.name}")
     console.print(f"[bold]Tile grid:[/bold] {cols} x {rows} = {len(specs)} tiles")

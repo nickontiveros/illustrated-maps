@@ -88,7 +88,7 @@ async def list_seams(name: str):
     project = load_project(name)
     service = get_seam_service()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     seams = service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     api_seams = [service_seam_to_api_seam(seam, name) for seam in seams]
@@ -108,7 +108,7 @@ async def get_seam(name: str, seam_id: str):
     project = load_project(name)
     service = get_seam_service()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     seams = service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     for seam in seams:
@@ -124,7 +124,7 @@ async def get_seam_preview(name: str, seam_id: str):
     project = load_project(name)
     service = get_seam_service()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     seams = service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     seam = None
@@ -165,7 +165,7 @@ async def repair_seam(name: str, seam_id: str, api_keys: APIKeys = Depends(get_a
     project = load_project(name)
     service = get_seam_service()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     seams = service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     seam = None
@@ -208,7 +208,7 @@ async def repair_seams_batch(
     project = load_project(name)
     service = get_seam_service()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     all_seams = service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     # Filter to requested seams
@@ -254,7 +254,7 @@ async def repair_all_seams(name: str, api_keys: APIKeys = Depends(get_api_keys))
     project = load_project(name)
     service = get_seam_service()
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     seams = service.identify_seams(cols, rows, project.output.width, project.output.height)
 
     # Filter to only unrepaired seams

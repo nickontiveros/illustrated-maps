@@ -1,15 +1,22 @@
 """Deep Zoom Image (DZI) endpoints for large image viewing."""
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
+from PIL import Image
 
 from ...services.dzi_service import DZIService, DZIInfo
 from ..schemas import SuccessResponse
 from .projects import get_project_cache_dir, load_project
+
+# Allow PIL to open very large assembled map images
+Image.MAX_IMAGE_PIXELS = None
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -23,6 +30,7 @@ def get_assembled_image_path(project_name: str) -> Optional[Path]:
     """Get the path to the assembled image for a project."""
     project = load_project(project_name)
     if not project.project_dir:
+        logger.warning("Project '%s' has no project_dir set", project_name)
         return None
 
     # Check multiple possible locations
@@ -36,6 +44,11 @@ def get_assembled_image_path(project_name: str) -> Optional[Path]:
         if path.exists():
             return path
 
+    logger.warning(
+        "No assembled image found for project '%s'. Checked: %s",
+        project_name,
+        [str(p) for p in candidates],
+    )
     return None
 
 
@@ -56,7 +69,16 @@ async def get_dzi_info(name: str):
     is_generated = service.is_generated(dzi_dir, "assembled")
 
     # Get info from image
-    info = service.get_info(assembled_path)
+    try:
+        info = service.get_info(assembled_path)
+    except Exception as e:
+        logger.error(
+            "Failed to read assembled image at %s: %s", assembled_path, e
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read assembled image: {e}",
+        )
 
     return {
         "project_name": name,

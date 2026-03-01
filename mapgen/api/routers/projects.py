@@ -117,9 +117,7 @@ async def list_projects():
 
         try:
             project = Project.from_yaml(project_yaml)
-            cols, rows = project.tiles.calculate_grid(
-                project.output.width, project.output.height
-            )
+            cols, rows = project.tiles.calculate_grid(*project.canvas_size)
 
             projects.append(ProjectSummary(
                 name=project.name,
@@ -283,7 +281,7 @@ async def estimate_project_cost(name: str):
     """Estimate the cost to generate a project."""
     project = load_project(name)
 
-    cols, rows = project.tiles.calculate_grid(project.output.width, project.output.height)
+    cols, rows = project.tiles.calculate_grid(*project.canvas_size)
     tile_count = cols * rows
     landmark_count = len(project.landmarks)
 

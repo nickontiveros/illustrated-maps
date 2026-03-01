@@ -69,3 +69,4 @@ frontend/dist/
 frontend/.vite/
 *.log
 npm-debug.log*
+frontend/tsconfig.tsbuildinfo
