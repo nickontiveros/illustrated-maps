@@ -771,6 +771,7 @@ class GenerationService:
         self,
         results: list[TileResult],
         apply_perspective: bool = True,
+        apply_color_grading: bool = True,
         tile_offsets: Optional[dict[str, dict[str, int]]] = None,
     ) -> Optional[Image.Image]:
         """
@@ -790,6 +791,7 @@ class GenerationService:
         Args:
             results: List of TileResult objects
             apply_perspective: Whether to apply perspective to final image
+            apply_color_grading: Whether to apply global color grading
             tile_offsets: Optional dict of "col,row" -> {"dx": int, "dy": int} offsets
 
         Returns:
@@ -878,7 +880,7 @@ class GenerationService:
             )
 
         # Apply global color grading if color consistency is enabled
-        if self._color_consistency is not None:
+        if apply_color_grading and self._color_consistency is not None:
             # Use the first successful tile as the grading reference
             ref_tile = next(
                 (r.generated_image for r in results if r.generated_image is not None),

@@ -54,11 +54,11 @@ class ColorConsistencyService:
         alpha_channel: Optional[np.ndarray] = None
 
         # Convert to RGB arrays
-        src_rgb = np.array(source.convert("RGB"), dtype=np.float64)
-        ref_rgb = np.array(reference.convert("RGB"), dtype=np.float64)
+        src_rgb = np.array(source.convert("RGB"), dtype=np.float32)
+        ref_rgb = np.array(reference.convert("RGB"), dtype=np.float32)
 
         if has_alpha:
-            alpha_channel = np.array(source)[:, :, 3]
+            alpha_channel = np.array(source.getchannel("A"))
 
         matched = np.empty_like(src_rgb)
         for ch in range(3):
@@ -195,7 +195,9 @@ class ColorConsistencyService:
     def apply_color_lut(self, image: Image.Image, lut: np.ndarray) -> Image.Image:
         """Apply a 3D color LUT to an image using trilinear interpolation.
 
-        Blended with original by self.strength.
+        Blended with original by self.strength.  Processes the image in
+        row-batches to keep peak memory bounded (a full-resolution float64
+        trilinear pass can easily exceed 30 GB for large assembled maps).
 
         Args:
             image: Image to apply LUT to.
@@ -205,67 +207,56 @@ class ColorConsistencyService:
             Color-graded image.
         """
         has_alpha = image.mode == "RGBA"
-        alpha_channel: Optional[np.ndarray] = None
 
-        img_rgb = np.array(image.convert("RGB"), dtype=np.float64)
-        if has_alpha:
-            alpha_channel = np.array(image)[:, :, 3]
-
+        img_rgb = np.array(image.convert("RGB"), dtype=np.float32)
         h, w, _ = img_rgb.shape
-        pixels = img_rgb.reshape(-1, 3)
 
-        lut_size = lut.shape[0]
-        bin_width = 256.0 / lut_size
+        lut_f32 = lut.astype(np.float32) if lut.dtype != np.float32 else lut
+        lut_size = lut_f32.shape[0]
+        bin_width = np.float32(256.0 / lut_size)
+        strength = np.float32(self.strength)
 
-        # Continuous coordinates into the LUT
-        coords = pixels / bin_width - 0.5
-        coords = np.clip(coords, 0, lut_size - 1 - 1e-6)
+        # Process in row batches to cap memory (~50 rows at a time)
+        batch_rows = max(1, min(50, h))
+        result_rgb = np.empty((h, w, 3), dtype=np.uint8)
 
-        # Integer (floor) and fractional parts
-        low = coords.astype(np.int64)
-        low = np.clip(low, 0, lut_size - 2)
-        frac = coords - low
+        for y0 in range(0, h, batch_rows):
+            y1 = min(y0 + batch_rows, h)
+            chunk = img_rgb[y0:y1]  # (batch, w, 3) view — no copy
+            pixels = chunk.reshape(-1, 3)
 
-        # The eight corners for trilinear interpolation
-        r0, g0, b0 = low[:, 0], low[:, 1], low[:, 2]
-        r1, g1, b1 = r0 + 1, g0 + 1, b0 + 1
+            coords = pixels / bin_width - 0.5
+            coords = np.clip(coords, 0, lut_size - 1 - 1e-6)
 
-        fr, fg, fb = frac[:, 0], frac[:, 1], frac[:, 2]
+            low = coords.astype(np.intp)
+            np.clip(low, 0, lut_size - 2, out=low)
+            frac = coords - low.astype(np.float32)
 
-        # Look up the eight corner values
-        c000 = lut[r0, g0, b0]
-        c001 = lut[r0, g0, b1]
-        c010 = lut[r0, g1, b0]
-        c011 = lut[r0, g1, b1]
-        c100 = lut[r1, g0, b0]
-        c101 = lut[r1, g0, b1]
-        c110 = lut[r1, g1, b0]
-        c111 = lut[r1, g1, b1]
+            r0, g0, b0 = low[:, 0], low[:, 1], low[:, 2]
+            r1, g1, b1 = r0 + 1, g0 + 1, b0 + 1
+            fr = frac[:, 0:1]
+            fg = frac[:, 1:2]
+            fb = frac[:, 2:3]
 
-        # Trilinear interpolation
-        fr = fr[:, np.newaxis]
-        fg = fg[:, np.newaxis]
-        fb = fb[:, np.newaxis]
+            # Trilinear interpolation (reuse arrays to limit allocations)
+            c00 = lut_f32[r0, g0, b0] * (1 - fb) + lut_f32[r0, g0, b1] * fb
+            c01 = lut_f32[r0, g1, b0] * (1 - fb) + lut_f32[r0, g1, b1] * fb
+            c10 = lut_f32[r1, g0, b0] * (1 - fb) + lut_f32[r1, g0, b1] * fb
+            c11 = lut_f32[r1, g1, b0] * (1 - fb) + lut_f32[r1, g1, b1] * fb
 
-        c00 = c000 * (1 - fb) + c001 * fb
-        c01 = c010 * (1 - fb) + c011 * fb
-        c10 = c100 * (1 - fb) + c101 * fb
-        c11 = c110 * (1 - fb) + c111 * fb
+            c0 = c00 * (1 - fg) + c01 * fg
+            c1 = c10 * (1 - fg) + c11 * fg
+            mapped = c0 * (1 - fr) + c1 * fr
 
-        c0 = c00 * (1 - fg) + c01 * fg
-        c1 = c10 * (1 - fg) + c11 * fg
+            blended = (1.0 - strength) * pixels + strength * mapped
+            np.clip(blended, 0, 255, out=blended)
+            result_rgb[y0:y1] = blended.reshape(y1 - y0, w, 3).astype(np.uint8)
 
-        mapped = c0 * (1 - fr) + c1 * fr
-        mapped = mapped.reshape(h, w, 3)
-
-        # Blend with original
-        blended = (1.0 - self.strength) * img_rgb + self.strength * mapped
-        blended = np.clip(blended, 0, 255).astype(np.uint8)
-
-        if has_alpha and alpha_channel is not None:
-            result = np.dstack([blended, alpha_channel])
+        if has_alpha:
+            alpha_channel = np.array(image.getchannel("A"))
+            result = np.dstack([result_rgb, alpha_channel])
             return Image.fromarray(result, "RGBA")
-        return Image.fromarray(blended, "RGB")
+        return Image.fromarray(result_rgb, "RGB")
 
     def apply_global_grading(
         self, assembled: Image.Image, reference: Image.Image

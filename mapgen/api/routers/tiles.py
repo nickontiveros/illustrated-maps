@@ -491,11 +491,17 @@ async def start_generation(
 
         def assemble():
             assembled = service.assemble_tiles(results, apply_perspective=False, tile_offsets=gen_offsets)
+            # Free tile images promptly
+            for r in results:
+                if r.generated_image is not None:
+                    r.generated_image.close()
+                    r.generated_image = None
             if assembled is not None:
                 output_dir = project.project_dir / "output" if project.project_dir else Path("output")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 output_path = output_dir / "assembled.png"
                 assembled.save(output_path)
+                assembled.close()
 
         await asyncio.to_thread(assemble)
 
@@ -606,24 +612,40 @@ async def assemble_tiles(name: str):
 
     def do_assemble():
         # Load cached tiles into TileResult objects
+        from PIL import Image
         generated_dir = cache_dir / "generated"
         results = []
         for spec in specs:
             tile_path = generated_dir / f"tile_{spec.col}_{spec.row}.png"
             if tile_path.exists():
-                from PIL import Image
                 img = Image.open(tile_path).convert("RGBA")
                 results.append(TileResult(spec=spec, generated_image=img))
 
         if not results:
             return None
 
-        assembled = service.assemble_tiles(results, apply_perspective=False, tile_offsets=offsets)
+        # Skip color grading: tiles were already individually color-matched
+        # during generation. Re-grading the assembled image is redundant and
+        # extremely memory-intensive on large canvases.
+        assembled = service.assemble_tiles(
+            results,
+            apply_perspective=False,
+            apply_color_grading=False,
+            tile_offsets=offsets,
+        )
+
+        # Free tile images promptly
+        for r in results:
+            if r.generated_image is not None:
+                r.generated_image.close()
+                r.generated_image = None
+
         if assembled is not None:
             output_dir = project.project_dir / "output" if project.project_dir else Path("output")
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / "assembled.png"
             assembled.save(output_path)
+            assembled.close()
             return output_path
         return None
 
