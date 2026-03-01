@@ -82,24 +82,21 @@ async def debug_volume():
     except Exception as e:
         results["df_error"] = str(e)
 
-    # Walk /app/data up to depth 4
+    # Walk /app/data fully, list all files
     base = Path("/app/data")
     entries = []
     for root, dirs, files in _os.walk(base):
-        depth = root.replace(str(base), "").count(_os.sep)
-        if depth > 3:
-            dirs.clear()
+        if "lost+found" in root:
             continue
-        for d in dirs:
-            entries.append({"path": str(Path(root) / d), "type": "dir"})
         for f in files:
             fp = Path(root) / f
             try:
                 size = fp.stat().st_size
             except Exception:
                 size = -1
-            entries.append({"path": str(fp), "type": "file", "size": size})
-    results["volume_contents"] = entries
+            entries.append({"path": str(fp.relative_to(base)), "size": size})
+    results["volume_files"] = entries
+    results["total_files"] = len(entries)
 
     # Env vars
     results["env"] = {
