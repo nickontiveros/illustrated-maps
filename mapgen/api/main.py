@@ -61,6 +61,25 @@ async def health_check():
     return {"status": "healthy", "version": "0.1.0"}
 
 
+@app.get("/api/debug/volume")
+async def debug_volume():
+    """Temporary: list contents of /app/data to inspect the volume."""
+    import os as _os
+    base = Path("/app/data")
+    if not base.exists():
+        return {"error": "/app/data does not exist"}
+    entries = []
+    for root, dirs, files in _os.walk(base):
+        depth = root.replace(str(base), "").count(_os.sep)
+        if depth > 3:
+            dirs.clear()
+            continue
+        for f in files:
+            p = Path(root) / f
+            entries.append({"path": str(p), "size": p.stat().st_size})
+    return {"mount": str(base), "file_count": len(entries), "files": entries[:200]}
+
+
 @app.get("/api/config")
 async def get_api_config(request: Request):
     """Get API configuration (non-sensitive)."""
@@ -116,7 +135,7 @@ def mount_static_files(app: FastAPI, projects_dir: Optional[Path] = None):
         projects_dir: Directory containing projects (defaults to ./projects)
     """
     if projects_dir is None:
-        projects_dir = Path.cwd() / "projects"
+        projects_dir = Path(os.environ.get("MAPGEN_PROJECTS_DIR", str(Path.cwd() / "projects")))
 
     if projects_dir.exists():
         app.mount(

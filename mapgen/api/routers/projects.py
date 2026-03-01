@@ -28,7 +28,7 @@ router = APIRouter()
 
 def get_projects_dir() -> Path:
     """Get the projects directory."""
-    return Path.cwd() / "projects"
+    return Path(os.environ.get("MAPGEN_PROJECTS_DIR", str(Path.cwd() / "projects")))
 
 
 def find_project_dir(name: str) -> Optional[Path]:

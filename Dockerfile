@@ -30,8 +30,9 @@ RUN pip install --no-cache-dir -e ".[api]"
 COPY --from=frontend /app/frontend/dist /app/static
 
 # Create data directory for volumes
-RUN mkdir -p /app/data/cache /app/data/output
+RUN mkdir -p /app/data/cache /app/data/output /app/data/projects
 
+ENV MAPGEN_PROJECTS_DIR=/app/data/projects
 ENV MAPGEN_CACHE_DIR=/app/data/cache
 ENV MAPGEN_OUTPUT_DIR=/app/data/output
 
