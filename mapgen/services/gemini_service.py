@@ -5,6 +5,7 @@ or newer models that support native image output.
 """
 
 import base64
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -138,6 +141,11 @@ class GeminiService:
 
     # Model configurations
     MODELS = {
+        "gemini-3.1-flash-image-preview": {
+            "max_size": 2048,
+            "supports_image_input": True,
+            "supports_image_output": True,
+        },
         "gemini-3-pro-image-preview": {
             "max_size": 2048,
             "supports_image_input": True,
@@ -158,7 +166,7 @@ class GeminiService:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-3-pro-image-preview",
+        model: str = "gemini-3.1-flash-image-preview",
     ):
         """
         Initialize Gemini service.
@@ -209,39 +217,21 @@ class GeminiService:
         """
         from google.genai import types
 
-        # Build prompt
-        if style_reference:
-            prompt = (
-                "You are given two images.\n"
-                "IMAGE 1 (satellite/map): Shows the exact geography you must illustrate — "
-                "every road, coastline, water body, park, and building must match this image.\n"
-                "IMAGE 2 (style reference): Shows the artistic style to emulate — match its "
-                "color palette, line quality, and hand-illustrated aesthetic.\n\n"
-                "CRITICAL: Only copy GEOGRAPHY from Image 1 (the satellite image). "
-                "Only copy STYLE from Image 2 (the style reference). "
-                "Do NOT reproduce any geographic features, roads, or landmarks from the style reference. "
-                "The style reference is from a different location.\n\n"
-            )
-            prompt += style_prompt or self.STYLE_PROMPTS["base_map"]
-        else:
-            prompt = style_prompt or self.STYLE_PROMPTS["base_map"]
+        # Build the style/instruction portion of the prompt
+        base_style = style_prompt or self.STYLE_PROMPTS["base_map"]
+
+        instruction_parts = [base_style]
 
         if terrain_description:
-            prompt += f"\n\nTerrain characteristics: {terrain_description}"
+            instruction_parts.append(f"\n\nTerrain characteristics: {terrain_description}")
             modifier = self.detect_terrain_modifier(terrain_description)
             if modifier:
-                prompt += modifier
+                instruction_parts.append(modifier)
 
         if tile_position:
-            prompt += f"\n\nThis is the {tile_position} section of the map."
+            instruction_parts.append(f"\n\nThis is the {tile_position} section of the map.")
 
-        # Enhanced road treatment hint
-        if style_reference:
-            prompt += (
-                "\n\nIMPORTANT: Follow the road widths and positions shown in "
-                "the satellite image (Image 1) closely. Roads should be clearly visible "
-                "paths with consistent width hierarchy."
-            )
+        instructions = "".join(instruction_parts)
 
         # Resize image if needed (max 2048 for most models)
         max_size = self.MODELS.get(self.model, {}).get("max_size", 2048)
@@ -249,7 +239,6 @@ class GeminiService:
             reference_image = reference_image.copy()
             reference_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
-        # Resize style reference to same max_size
         if style_reference:
             if style_reference.width > max_size or style_reference.height > max_size:
                 style_reference = style_reference.copy()
@@ -257,11 +246,52 @@ class GeminiService:
 
         start_time = time.time()
 
-        # Build contents list
+        # Build contents list.
+        # When using a style reference, interleave labels BEFORE each image so
+        # the model knows each image's role before it processes the pixels.
         if style_reference:
-            contents = [reference_image, style_reference, prompt]
+            prompt = (
+                "GEOGRAPHY SOURCE — illustrate ONLY the geography (roads, buildings, "
+                "coastlines, parks, terrain) shown in this satellite/map image:"
+            )
+            contents = [
+                prompt,
+                reference_image,
+                (
+                    "STYLE REFERENCE — copy ONLY the artistic style (color palette, "
+                    "line quality, hand-illustrated look) from this image. "
+                    "IGNORE all geography, roads, and features in this image — "
+                    "it is from a completely different location:"
+                ),
+                style_reference,
+                (
+                    "Now generate an illustrated map tile.\n"
+                    "CRITICAL RULES:\n"
+                    "1. Geography MUST come from the satellite image above. "
+                    "Every road, intersection, park, and building must match the satellite.\n"
+                    "2. Style MUST come from the style reference. Match its colors, line "
+                    "quality, and painted aesthetic.\n"
+                    "3. Do NOT reproduce any roads, layouts, or features from the style "
+                    "reference — its geography is from a different place.\n\n"
+                ) + instructions,
+            ]
         else:
+            prompt = instructions
             contents = [reference_image, prompt]
+
+        # Log details of the Gemini call for debugging
+        text_parts = [c for c in contents if isinstance(c, str)]
+        image_parts = [c for c in contents if isinstance(c, Image.Image)]
+        logger.info(
+            "Gemini call: model=%s, images=%d [%s], text_parts=%d, prompt_len=%d",
+            self.model,
+            len(image_parts),
+            ", ".join(f"{img.size[0]}x{img.size[1]}" for img in image_parts),
+            len(text_parts),
+            sum(len(t) for t in text_parts),
+        )
+        for i, part in enumerate(text_parts):
+            logger.debug("Gemini text part %d:\n%s", i, part[:500])
 
         # Generate with image input using new SDK
         response = self.client.models.generate_content(
@@ -276,6 +306,10 @@ class GeminiService:
 
         # Extract image from response
         generated_image = self._extract_image_from_response(response)
+        logger.info(
+            "Gemini response: %dx%d in %.1fs",
+            generated_image.width, generated_image.height, generation_time,
+        )
 
         return GenerationResult(
             image=generated_image,

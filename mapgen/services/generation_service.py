@@ -445,29 +445,18 @@ class GenerationService:
         return is_water
 
     def _tile_render_size(self, bbox: 'BoundingBox') -> tuple[int, int]:
-        """Calculate render dimensions that preserve the geographic aspect ratio.
+        """Return uniform square render dimensions for all tiles.
 
-        Fits within tile_size × tile_size while matching the bbox's true
-        geographic aspect ratio (accounting for latitude correction).
+        Every tile is rendered at tile_size × tile_size regardless of its
+        geographic aspect ratio. Individual tile bboxes vary slightly due to
+        overlap, but the differences are small enough that a uniform square
+        avoids inconsistent sizing in the Gemini input/output and assembly.
 
         Returns:
-            (width, height) in pixels
+            (tile_size, tile_size)
         """
-        import math
-
         tile_size = self.project.tiles.size
-        geo_aspect = bbox.geographic_aspect_ratio  # width / height
-
-        if geo_aspect >= 1.0:
-            # Wider than tall
-            w = tile_size
-            h = max(1, round(tile_size / geo_aspect))
-        else:
-            # Taller than wide
-            h = tile_size
-            w = max(1, round(tile_size * geo_aspect))
-
-        return (w, h)
+        return (tile_size, tile_size)
 
     def generate_tile_reference(
         self,
