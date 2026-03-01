@@ -53,6 +53,22 @@ DETAIL_LEVEL_THRESHOLDS = {
 }
 
 
+def validate_aspect_ratio(
+    region_aspect: float, output_aspect: float, tolerance: float = 0.02
+) -> bool:
+    """Check whether the region aspect ratio matches the output aspect ratio.
+
+    Args:
+        region_aspect: Width/height ratio of the geographic region.
+        output_aspect: Width/height ratio of the output image.
+        tolerance: Maximum relative deviation (default 2%).
+
+    Returns:
+        True if the ratios match within tolerance.
+    """
+    return abs(region_aspect / output_aspect - 1.0) <= tolerance
+
+
 def calculate_adjusted_dimensions(
     geo_aspect: float,
     target_area_pixels: int = 7016 * 9933,  # A1 area
@@ -220,6 +236,43 @@ class BoundingBox(BaseModel):
             west=max(-180, center_lon - new_half_w),
         )
 
+    def constrain_to_aspect_ratio(
+        self, target_aspect: float, lock: str = "height"
+    ) -> "BoundingBox":
+        """Return a new BoundingBox adjusted to match target_aspect (width/height).
+
+        Args:
+            target_aspect: Desired geographic aspect ratio (width_km / height_km).
+            lock: Which dimension to keep fixed.
+                  ``"height"`` keeps N/S fixed and adjusts E/W.
+                  ``"width"`` keeps E/W fixed and adjusts N/S.
+
+        Returns:
+            A new BoundingBox with the corrected proportions.
+        """
+        center_lat, center_lon = self.center
+        cos_lat = math.cos(math.radians(center_lat))
+
+        if lock == "height":
+            needed_width_deg = target_aspect * self.height_degrees / cos_lat
+            half_w = needed_width_deg / 2
+            return BoundingBox(
+                north=self.north,
+                south=self.south,
+                east=min(180, center_lon + half_w),
+                west=max(-180, center_lon - half_w),
+            )
+        else:  # lock == "width"
+            corrected_width = self.width_degrees * cos_lat
+            needed_height_deg = corrected_width / target_aspect
+            half_h = needed_height_deg / 2
+            return BoundingBox(
+                north=min(90, center_lat + half_h),
+                south=max(-90, center_lat - half_h),
+                east=self.east,
+                west=self.west,
+            )
+
     def to_tuple(self) -> tuple[float, float, float, float]:
         """Return as (north, south, east, west) tuple for OSMnx."""
         return (self.north, self.south, self.east, self.west)
@@ -242,6 +295,11 @@ class OrientedRegion(BaseModel):
     width_km: float = Field(..., gt=0, description="East-west extent in km (before rotation)")
     height_km: float = Field(..., gt=0, description="North-south extent in km (before rotation)")
     rotation_deg: float = Field(default=0.0, description="Clockwise degrees from north")
+
+    @property
+    def aspect_ratio(self) -> float:
+        """Width / Height ratio of the region in km."""
+        return self.width_km / self.height_km
 
     def to_axis_aligned_bbox(self) -> BoundingBox:
         """Convert to axis-aligned bbox (no rotation, just the rectangle dimensions)."""

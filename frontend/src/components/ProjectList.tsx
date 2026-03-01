@@ -5,6 +5,23 @@ import { useAppStore } from '@/stores/appStore';
 import type { OrientedRegion } from '@/types';
 import RegionDrawer from '@/components/RegionDrawer';
 
+const OUTPUT_ASPECT_RATIO = 7016 / 9933;
+
+/** Adjust E/W of a bbox so its geographic aspect ratio matches A1 output proportions. */
+function constrainBBoxToAspectRatio(coords: { north: number; south: number; east: number; west: number }) {
+  const centerLat = (coords.north + coords.south) / 2;
+  const cosLat = Math.cos((centerLat * Math.PI) / 180);
+  const heightDeg = Math.abs(coords.north - coords.south);
+  const neededWidthDeg = (OUTPUT_ASPECT_RATIO * heightDeg) / cosLat;
+  const centerLon = (coords.east + coords.west) / 2;
+  return {
+    north: coords.north,
+    south: coords.south,
+    east: centerLon + neededWidthDeg / 2,
+    west: centerLon - neededWidthDeg / 2,
+  };
+}
+
 function ProjectList() {
   const { data: projects, isLoading, error } = useProjects();
   const createProject = useCreateProject();
@@ -39,9 +56,10 @@ function ProjectList() {
 
     try {
       if (manualMode) {
+        const adjusted = constrainBBoxToAspectRatio(manualCoords);
         await createProject.mutateAsync({
           name: projectName,
-          region: manualCoords,
+          region: adjusted,
         });
       } else if (orientedRegion) {
         await createProject.mutateAsync({
@@ -235,6 +253,9 @@ function ProjectList() {
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
                   </div>
+                  <p className="col-span-2 text-xs text-slate-400 mt-1">
+                    East/West will be auto-adjusted to match A1 poster proportions.
+                  </p>
                 </div>
               ) : (
                 <>

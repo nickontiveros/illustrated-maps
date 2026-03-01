@@ -106,11 +106,13 @@ class TestCreateProject:
     """Test project creation."""
 
     def test_create_project(self, client):
+        # A1-proportional bbox: at center lat 40.5, cos≈0.7604
+        # width_deg = 0.7063 * 1.0 / 0.7604 ≈ 0.9289, centered on -73.5
         response = client.post("/api/projects", json={
             "name": "new-project",
             "region": {
                 "north": 41.0, "south": 40.0,
-                "east": -73.0, "west": -74.0,
+                "east": -73.0355, "west": -73.9645,
             },
         })
         assert response.status_code == 201
@@ -122,10 +124,33 @@ class TestCreateProject:
             "name": "test-project",
             "region": {
                 "north": 41.0, "south": 40.0,
-                "east": -73.0, "west": -74.0,
+                "east": -73.0355, "west": -73.9645,
             },
         })
         assert response.status_code == 409
+
+    def test_create_rejects_wrong_aspect_ratio(self, client):
+        """Square region should be rejected (doesn't match A1 portrait)."""
+        response = client.post("/api/projects", json={
+            "name": "square-project",
+            "region": {
+                "north": 41.0, "south": 40.0,
+                "east": -73.0, "west": -74.0,
+            },
+        })
+        assert response.status_code == 422
+        assert "aspect ratio" in response.json()["detail"].lower()
+
+    def test_create_accepts_matching_aspect_ratio(self, client):
+        """A1-proportional region should be accepted."""
+        response = client.post("/api/projects", json={
+            "name": "a1-project",
+            "region": {
+                "north": 41.0, "south": 40.0,
+                "east": -73.0355, "west": -73.9645,
+            },
+        })
+        assert response.status_code == 201
 
 
 class TestUpdateProject:

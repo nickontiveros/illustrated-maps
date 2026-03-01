@@ -6,14 +6,16 @@ import type { OrientedRegion } from '@/types';
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 
-// Default dimensions for initial click placement
-const DEFAULT_WIDTH_KM = 10;
+// Lock region proportions to A1 output (7016×9933 px)
+const OUTPUT_ASPECT_RATIO = 7016 / 9933; // ~0.7063
 const DEFAULT_HEIGHT_KM = 15;
+const DEFAULT_WIDTH_KM = DEFAULT_HEIGHT_KM * OUTPUT_ASPECT_RATIO; // ~10.6
 
 interface RegionDrawerProps {
   value: OrientedRegion | null;
   onChange: (region: OrientedRegion | null) => void;
   rotation: number;
+  outputAspectRatio?: number;
 }
 
 // Rotate a geographic point around a center, accounting for latitude scaling
@@ -195,7 +197,7 @@ function RegionOverlay({
   );
 }
 
-export default function RegionDrawer({ value, onChange, rotation }: RegionDrawerProps) {
+export default function RegionDrawer({ value, onChange, rotation, outputAspectRatio = OUTPUT_ASPECT_RATIO }: RegionDrawerProps) {
   const mapRef = useRef<MapRef>(null);
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const dragRef = useRef<{
@@ -267,10 +269,13 @@ export default function RegionDrawer({ value, onChange, rotation }: RegionDrawer
     let newH = sr.height_km;
 
     // Each edge handle extends from center, so new half-extent = |local distance|
+    // Both dimensions always update together to maintain A1 aspect ratio
     if (drag.type === 'n' || drag.type === 's') {
       newH = Math.max(1, Math.abs(localY) * 2);
+      newW = newH * outputAspectRatio;
     } else if (drag.type === 'e' || drag.type === 'w') {
       newW = Math.max(1, Math.abs(localX) * 2);
+      newH = newW / outputAspectRatio;
     }
 
     onChange({ ...sr, width_km: newW, height_km: newH });

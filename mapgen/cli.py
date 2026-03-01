@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .config import get_config
-from .models.project import BoundingBox, CardinalDirection, DetailLevel, OrientedRegion, Project, get_recommended_detail_level
+from .models.project import BoundingBox, CardinalDirection, DetailLevel, OrientedRegion, OutputSettings, Project, get_recommended_detail_level, validate_aspect_ratio
 
 
 def timestamped_filename(base_name: str, extension: str = "png") -> str:
@@ -183,6 +183,16 @@ def init(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     bbox = BoundingBox(north=north, south=south, east=east, west=west)
+
+    # Auto-adjust bbox to match A1 output aspect ratio
+    target_aspect = OutputSettings().aspect_ratio
+    if not validate_aspect_ratio(bbox.geographic_aspect_ratio, target_aspect):
+        old_bbox = bbox
+        bbox = bbox.constrain_to_aspect_ratio(target_aspect)
+        console.print(
+            f"[yellow]Adjusted region to match A1 proportions:[/yellow] "
+            f"E/W {old_bbox.west:.4f}..{old_bbox.east:.4f} → {bbox.west:.4f}..{bbox.east:.4f}"
+        )
 
     # Determine effective rotation
     effective_rotation = rotation

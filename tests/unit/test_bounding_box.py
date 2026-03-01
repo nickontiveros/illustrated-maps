@@ -5,7 +5,7 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from mapgen.models.project import BoundingBox, DetailLevel
+from mapgen.models.project import BoundingBox, DetailLevel, OrientedRegion, OutputSettings, validate_aspect_ratio
 
 
 class TestBoundingBoxConstruction:
@@ -119,3 +119,79 @@ class TestBoundingBoxSerialization:
     def test_to_osmnx_bbox(self, sample_bbox):
         t = sample_bbox.to_osmnx_bbox()
         assert t == (-73.978, 40.768, -73.968, 40.775)
+
+
+class TestValidateAspectRatio:
+    """Test the validate_aspect_ratio helper."""
+
+    def test_matching_ratios(self):
+        assert validate_aspect_ratio(0.7063, 0.7063) is True
+
+    def test_within_tolerance(self):
+        # 1% off should pass with 2% tolerance
+        assert validate_aspect_ratio(0.7063 * 1.01, 0.7063) is True
+
+    def test_outside_tolerance(self):
+        # 5% off should fail
+        assert validate_aspect_ratio(0.7063 * 1.05, 0.7063) is False
+
+    def test_exact_match(self):
+        assert validate_aspect_ratio(1.0, 1.0) is True
+
+    def test_custom_tolerance(self):
+        assert validate_aspect_ratio(0.7063 * 1.04, 0.7063, tolerance=0.05) is True
+        assert validate_aspect_ratio(0.7063 * 1.04, 0.7063, tolerance=0.02) is False
+
+
+class TestConstrainToAspectRatio:
+    """Test BoundingBox.constrain_to_aspect_ratio()."""
+
+    def test_lock_height_adjusts_ew(self):
+        bbox = BoundingBox(north=1.0, south=-1.0, east=1.0, west=-1.0)
+        target = 0.5  # narrower
+        result = bbox.constrain_to_aspect_ratio(target, lock="height")
+        assert result.north == bbox.north
+        assert result.south == bbox.south
+        # New width should be narrower
+        assert result.geographic_aspect_ratio == pytest.approx(target, rel=0.01)
+
+    def test_lock_width_adjusts_ns(self):
+        bbox = BoundingBox(north=1.0, south=-1.0, east=1.0, west=-1.0)
+        target = 0.5  # narrower → need taller height
+        result = bbox.constrain_to_aspect_ratio(target, lock="width")
+        assert result.east == bbox.east
+        assert result.west == bbox.west
+        assert result.geographic_aspect_ratio == pytest.approx(target, rel=0.01)
+
+    def test_a1_proportion_at_nyc_latitude(self):
+        """Constrain a square-ish bbox at NYC latitude to A1 proportions."""
+        bbox = BoundingBox(north=41.0, south=40.0, east=-73.0, west=-74.0)
+        a1_aspect = OutputSettings().aspect_ratio
+        result = bbox.constrain_to_aspect_ratio(a1_aspect)
+        assert validate_aspect_ratio(result.geographic_aspect_ratio, a1_aspect) is True
+
+
+class TestOrientedRegionAspectRatio:
+    """Test OrientedRegion.aspect_ratio property."""
+
+    def test_basic(self):
+        region = OrientedRegion(
+            center_lat=40.0, center_lon=-74.0,
+            width_km=7.0, height_km=10.0,
+        )
+        assert region.aspect_ratio == pytest.approx(0.7)
+
+    def test_square(self):
+        region = OrientedRegion(
+            center_lat=0.0, center_lon=0.0,
+            width_km=5.0, height_km=5.0,
+        )
+        assert region.aspect_ratio == pytest.approx(1.0)
+
+    def test_a1_proportions(self):
+        a1_aspect = OutputSettings().aspect_ratio
+        region = OrientedRegion(
+            center_lat=40.0, center_lon=-74.0,
+            width_km=10.0 * a1_aspect, height_km=10.0,
+        )
+        assert validate_aspect_ratio(region.aspect_ratio, a1_aspect) is True

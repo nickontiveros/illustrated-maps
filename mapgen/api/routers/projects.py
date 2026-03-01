@@ -9,7 +9,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from ...config import get_config
-from ...models.project import Project, StyleSettings
+from ...models.project import (
+    BoundingBox,
+    OrientedRegion,
+    OutputSettings,
+    Project,
+    StyleSettings,
+    validate_aspect_ratio,
+)
 from ..schemas import (
     ErrorResponse,
     ProjectCreate,
@@ -80,6 +87,38 @@ def get_project_cache_dir(project_name: str) -> Path:
     project_dir = find_project_dir(project_name)
     dir_name = project_dir.name if project_dir else project_name
     return config.cache_dir / "projects" / dir_name
+
+
+def _validate_region_aspect_ratio(
+    oriented_region: OrientedRegion | None,
+    region: BoundingBox | None,
+    output: OutputSettings | None,
+) -> None:
+    """Raise 422 if the region's aspect ratio doesn't match the output's.
+
+    Checks OrientedRegion first (width_km/height_km), falling back to
+    BoundingBox (geographic_aspect_ratio). Compares against the provided
+    OutputSettings or the default A1 dimensions.
+    """
+    output_settings = output or OutputSettings()
+    output_aspect = output_settings.aspect_ratio
+
+    if oriented_region is not None:
+        region_aspect = oriented_region.aspect_ratio
+    elif region is not None:
+        region_aspect = region.geographic_aspect_ratio
+    else:
+        return  # nothing to validate
+
+    if not validate_aspect_ratio(region_aspect, output_aspect):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Region aspect ratio ({region_aspect:.4f}) does not match "
+                f"output aspect ratio ({output_aspect:.4f}). "
+                "Adjust the region dimensions or output size so they are proportional."
+            ),
+        )
 
 
 def check_has_generated_tiles(project_name: str) -> bool:
@@ -154,6 +193,9 @@ async def create_project(request: ProjectCreate):
             detail="Either 'region' or 'oriented_region' must be provided"
         )
 
+    # Validate aspect ratio before creating
+    _validate_region_aspect_ratio(request.oriented_region, request.region, request.output)
+
     # Create project with provided settings or defaults
     project_kwargs: dict = {
         "name": request.name,
@@ -201,6 +243,12 @@ async def get_project(name: str):
 async def update_project(name: str, request: ProjectUpdate):
     """Update project settings."""
     project = load_project(name)
+
+    # Validate aspect ratio if region is being changed
+    if request.oriented_region is not None:
+        _validate_region_aspect_ratio(
+            request.oriented_region, None, request.output or project.output
+        )
 
     # Update fields that were provided
     if request.oriented_region is not None:
