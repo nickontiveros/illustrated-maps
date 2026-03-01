@@ -61,52 +61,6 @@ async def health_check():
     return {"status": "healthy", "version": "0.1.0"}
 
 
-@app.get("/api/debug/volume")
-async def debug_volume():
-    """Temporary: inspect volume mount status."""
-    import os as _os
-    import subprocess
-    results: dict = {}
-
-    # Check what's mounted
-    try:
-        mounts = subprocess.check_output(["mount"], text=True)
-        results["mounts"] = [l for l in mounts.splitlines() if "app" in l.lower() or "data" in l.lower()]
-    except Exception as e:
-        results["mounts_error"] = str(e)
-
-    # Check df for volume info
-    try:
-        df = subprocess.check_output(["df", "-h"], text=True)
-        results["df"] = [l for l in df.splitlines() if "app" in l.lower() or "data" in l.lower() or "Filesystem" in l]
-    except Exception as e:
-        results["df_error"] = str(e)
-
-    # Walk /app/data fully, list all files
-    base = Path("/app/data")
-    entries = []
-    for root, dirs, files in _os.walk(base):
-        if "lost+found" in root:
-            continue
-        for f in files:
-            fp = Path(root) / f
-            try:
-                size = fp.stat().st_size
-            except Exception:
-                size = -1
-            entries.append({"path": str(fp.relative_to(base)), "size": size})
-    results["volume_files"] = entries
-    results["total_files"] = len(entries)
-
-    # Env vars
-    results["env"] = {
-        k: v for k, v in _os.environ.items()
-        if "MAPGEN" in k or "DATA" in k or "PROJECT" in k
-    }
-
-    return results
-
-
 @app.get("/api/config")
 async def get_api_config(request: Request):
     """Get API configuration (non-sensitive)."""
