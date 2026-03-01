@@ -1,3 +1,12 @@
+// Oriented region type
+export interface OrientedRegion {
+  center_lat: number;
+  center_lon: number;
+  width_km: number;
+  height_km: number;
+  rotation_deg: number;
+}
+
 // Project types
 export interface BoundingBox {
   north: number;
@@ -107,6 +116,7 @@ export interface ProjectSummary {
 export interface ProjectDetail {
   name: string;
   region: BoundingBox;
+  oriented_region?: OrientedRegion;
   output: OutputSettings;
   style: StyleSettings;
   tiles: TileSettings;

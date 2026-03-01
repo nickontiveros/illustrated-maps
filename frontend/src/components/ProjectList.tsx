@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useProjects, useCreateProject, useDeleteProject } from '@/hooks/useProjects';
 import { useAppStore } from '@/stores/appStore';
+import type { OrientedRegion } from '@/types';
+import RegionDrawer from '@/components/RegionDrawer';
 
 function ProjectList() {
   const { data: projects, isLoading, error } = useProjects();
@@ -11,30 +13,47 @@ function ProjectList() {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [newProject, setNewProject] = useState({
-    name: '',
+  const [projectName, setProjectName] = useState('');
+  const [rotation, setRotation] = useState(0);
+  const [orientedRegion, setOrientedRegion] = useState<OrientedRegion | null>(null);
+  const [manualMode, setManualMode] = useState(false);
+  const [manualCoords, setManualCoords] = useState({
     north: 40.758,
     south: 40.7,
     east: -73.97,
     west: -74.02,
   });
 
+  const resetCreateForm = () => {
+    setProjectName('');
+    setRotation(0);
+    setOrientedRegion(null);
+    setManualMode(false);
+    setManualCoords({ north: 40.758, south: 40.7, east: -73.97, west: -74.02 });
+    setCreateError(null);
+  };
+
   const handleCreate = async () => {
-    if (!newProject.name.trim()) return;
+    if (!projectName.trim()) return;
     setCreateError(null);
 
     try {
-      await createProject.mutateAsync({
-        name: newProject.name,
-        region: {
-          north: newProject.north,
-          south: newProject.south,
-          east: newProject.east,
-          west: newProject.west,
-        },
-      });
+      if (manualMode) {
+        await createProject.mutateAsync({
+          name: projectName,
+          region: manualCoords,
+        });
+      } else if (orientedRegion) {
+        await createProject.mutateAsync({
+          name: projectName,
+          oriented_region: orientedRegion,
+        });
+      } else {
+        setCreateError('Please place a region on the map or use manual coordinates');
+        return;
+      }
       setShowCreateModal(false);
-      setNewProject({ name: '', north: 40.758, south: 40.7, east: -73.97, west: -74.02 });
+      resetCreateForm();
     } catch (e: any) {
       const message = e?.data?.detail || e?.message || 'Failed to create project';
       setCreateError(message);
@@ -146,7 +165,7 @@ function ProjectList() {
       {/* Create Project Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
             <h2 className="text-xl font-semibold mb-4">Create New Project</h2>
 
             <div className="space-y-4">
@@ -154,55 +173,103 @@ function ProjectList() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
                 <input
                   type="text"
-                  value={newProject.name}
-                  onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   placeholder="My Map Project"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">North</label>
+              {/* Mode toggle */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-slate-600">
                   <input
-                    type="number"
-                    step="0.001"
-                    value={newProject.north}
-                    onChange={(e) => setNewProject({ ...newProject, north: parseFloat(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    type="checkbox"
+                    checked={manualMode}
+                    onChange={(e) => setManualMode(e.target.checked)}
+                    className="mr-1.5"
                   />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">South</label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={newProject.south}
-                    onChange={(e) => setNewProject({ ...newProject, south: parseFloat(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">East</label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={newProject.east}
-                    onChange={(e) => setNewProject({ ...newProject, east: parseFloat(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">West</label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={newProject.west}
-                    onChange={(e) => setNewProject({ ...newProject, west: parseFloat(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
+                  Manual coordinates
+                </label>
               </div>
+
+              {manualMode ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">North</label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={manualCoords.north}
+                      onChange={(e) => setManualCoords({ ...manualCoords, north: parseFloat(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">South</label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={manualCoords.south}
+                      onChange={(e) => setManualCoords({ ...manualCoords, south: parseFloat(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">East</label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={manualCoords.east}
+                      onChange={(e) => setManualCoords({ ...manualCoords, east: parseFloat(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">West</label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={manualCoords.west}
+                      onChange={(e) => setManualCoords({ ...manualCoords, west: parseFloat(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Rotation slider */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Rotation: {rotation}°
+                    </label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={359}
+                      value={rotation}
+                      onChange={(e) => setRotation(parseInt(e.target.value))}
+                      className="w-full"
+                    />
+                  </div>
+
+                  {/* Map-based region drawer */}
+                  <RegionDrawer
+                    value={orientedRegion}
+                    onChange={setOrientedRegion}
+                    rotation={rotation}
+                  />
+
+                  {/* Region dimensions display */}
+                  {orientedRegion && (
+                    <div className="text-sm text-slate-500 flex gap-4">
+                      <span>{orientedRegion.width_km.toFixed(1)} km wide</span>
+                      <span>{orientedRegion.height_km.toFixed(1)} km tall</span>
+                      <span>Center: {orientedRegion.center_lat.toFixed(4)}, {orientedRegion.center_lon.toFixed(4)}</span>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             {createError && (
@@ -213,14 +280,14 @@ function ProjectList() {
 
             <div className="mt-6 flex justify-end gap-3">
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => { setShowCreateModal(false); resetCreateForm(); }}
                 className="px-4 py-2 text-slate-600 hover:text-slate-800"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreate}
-                disabled={createProject.isPending || !newProject.name.trim()}
+                disabled={createProject.isPending || !projectName.trim()}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {createProject.isPending ? 'Creating...' : 'Create'}

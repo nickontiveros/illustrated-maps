@@ -17,6 +17,7 @@ from ..models.project import (
     DetailLevel,
     FillRegion,
     FocusRegion,
+    OrientedRegion,
     OutputSettings,
     Project,
     SectionalLayout,
@@ -47,6 +48,7 @@ class ProjectDetail(BaseModel):
 
     name: str
     region: BoundingBox
+    oriented_region: Optional[OrientedRegion] = None
     output: OutputSettings
     style: StyleSettings
     tiles: TileSettings
@@ -75,6 +77,7 @@ class ProjectDetail(BaseModel):
         return cls(
             name=project.name,
             region=project.region,
+            oriented_region=project.oriented_region,
             output=project.output,
             style=project.style,
             tiles=project.tiles,
@@ -96,7 +99,8 @@ class ProjectCreate(BaseModel):
     """Request to create a new project."""
 
     name: str = Field(..., min_length=1, max_length=100)
-    region: BoundingBox
+    region: Optional[BoundingBox] = None
+    oriented_region: Optional[OrientedRegion] = None
     output: Optional[OutputSettings] = None
     style: Optional[StyleSettings] = None
     tiles: Optional[TileSettings] = None
@@ -110,6 +114,7 @@ class ProjectUpdate(BaseModel):
     output: Optional[OutputSettings] = None
     style: Optional[StyleSettings] = None
     tiles: Optional[TileSettings] = None
+    oriented_region: Optional[OrientedRegion] = None
     title: Optional[str] = Field(None, max_length=200)
     subtitle: Optional[str] = Field(None, max_length=200)
     border: Optional[BorderSettings] = None

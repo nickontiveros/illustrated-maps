@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { BoundingBox, OutputSettings, StyleSettings, TileSettings, BorderSettings, NarrativeSettings } from '@/types';
+import type { BoundingBox, OrientedRegion, OutputSettings, StyleSettings, TileSettings, BorderSettings, NarrativeSettings } from '@/types';
 
 export function useProjects() {
   return useQuery({
@@ -31,7 +31,8 @@ export function useCreateProject() {
   return useMutation({
     mutationFn: (data: {
       name: string;
-      region: BoundingBox;
+      region?: BoundingBox;
+      oriented_region?: OrientedRegion;
       output?: OutputSettings;
       style?: StyleSettings;
       tiles?: TileSettings;
@@ -50,6 +51,7 @@ export function useUpdateProject(name: string) {
       output?: OutputSettings;
       style?: StyleSettings;
       tiles?: TileSettings;
+      oriented_region?: OrientedRegion;
       title?: string;
       subtitle?: string;
       border?: BorderSettings;

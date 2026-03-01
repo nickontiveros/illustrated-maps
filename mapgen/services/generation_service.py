@@ -251,7 +251,7 @@ class GenerationService:
         """
         tiles = self.project.tiles
         output = self.project.output
-        region = self.project.region
+        region = self.project.generation_bbox
 
         # Calculate grid dimensions
         cols, rows = tiles.calculate_grid(output.width, output.height)
@@ -347,7 +347,7 @@ class GenerationService:
             if self._osm_data is None:
                 print(f"Fetching OSM data with detail level: {self._detail_level.value}")
                 self._osm_data = self.osm.fetch_region_data(
-                    self.project.region,
+                    self.project.generation_bbox,
                     detail_level=self._detail_level.value,
                     progress_callback=progress_callback,
                 )
@@ -533,9 +533,6 @@ class GenerationService:
             )
             from PIL import Image as PILImage
             composite = PILImage.alpha_composite(composite.convert("RGBA"), road_ref)
-
-        # Apply orientation rotation if not north-up
-        composite = self._apply_orientation_rotation(composite)
 
         return composite
 
@@ -807,7 +804,7 @@ class GenerationService:
 
         tiles_config = self.project.tiles
         output_config = self.project.output
-        region = self.project.region
+        region = self.project.generation_bbox
 
         cols, rows = tiles_config.calculate_grid(output_config.width, output_config.height)
         lon_step = region.width_degrees / cols
@@ -900,6 +897,23 @@ class GenerationService:
                 horizon_margin=0.15,
             )
             assembled = perspective.transform_image(assembled)
+
+        # Apply orientation rotation and crop for oriented regions
+        rotation = self._rotation_degrees
+        if rotation != 0 and rotation % 360 != 0:
+            # Rotate around center (negative because PIL rotates counter-clockwise)
+            assembled = assembled.rotate(
+                -rotation,
+                resample=Image.Resampling.BICUBIC,
+                expand=False,
+                fillcolor=(0, 0, 0, 0) if assembled.mode == "RGBA" else None,
+            )
+            # Crop to final output dimensions from center
+            cx, cy = assembled.width // 2, assembled.height // 2
+            final_w, final_h = output_config.width, output_config.height
+            left = cx - final_w // 2
+            top = cy - final_h // 2
+            assembled = assembled.crop((left, top, left + final_w, top + final_h))
 
         return assembled
 

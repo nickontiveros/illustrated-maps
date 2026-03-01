@@ -229,6 +229,51 @@ class BoundingBox(BaseModel):
         return (self.west, self.south, self.east, self.north)
 
 
+class OrientedRegion(BaseModel):
+    """Region defined by center, dimensions, and rotation.
+
+    Instead of axis-aligned N/S/E/W bounds, this represents a region
+    as center point + dimensions + rotation angle, enabling oriented
+    (non-axis-aligned) map regions.
+    """
+
+    center_lat: float = Field(..., ge=-90, le=90, description="Center latitude")
+    center_lon: float = Field(..., ge=-180, le=180, description="Center longitude")
+    width_km: float = Field(..., gt=0, description="East-west extent in km (before rotation)")
+    height_km: float = Field(..., gt=0, description="North-south extent in km (before rotation)")
+    rotation_deg: float = Field(default=0.0, description="Clockwise degrees from north")
+
+    def to_axis_aligned_bbox(self) -> BoundingBox:
+        """Convert to axis-aligned bbox (no rotation, just the rectangle dimensions)."""
+        half_height_deg = (self.height_km / 2) / 111.32
+        half_width_deg = (self.width_km / 2) / (111.32 * math.cos(math.radians(self.center_lat)))
+        return BoundingBox(
+            north=min(90, self.center_lat + half_height_deg),
+            south=max(-90, self.center_lat - half_height_deg),
+            east=min(180, self.center_lon + half_width_deg),
+            west=max(-180, self.center_lon - half_width_deg),
+        )
+
+    def to_generation_bbox(self) -> BoundingBox:
+        """Get expanded axis-aligned bbox that fully covers the rotated region."""
+        base = self.to_axis_aligned_bbox()
+        return base.expanded_for_rotation(self.rotation_deg)
+
+    @classmethod
+    def from_bbox_and_orientation(cls, bbox: BoundingBox, orientation_deg: float) -> "OrientedRegion":
+        """Migrate from old BoundingBox + orientation format."""
+        center_lat, center_lon = bbox.center
+        width_km = bbox.width_degrees * 111.32 * math.cos(math.radians(center_lat))
+        height_km = bbox.height_degrees * 111.32
+        return cls(
+            center_lat=center_lat,
+            center_lon=center_lon,
+            width_km=width_km,
+            height_km=height_km,
+            rotation_deg=orientation_deg,
+        )
+
+
 class OutputSettings(BaseModel):
     """Output image settings."""
 
@@ -415,9 +460,37 @@ class Project(BaseModel):
         default=None,
         description="Sectional layout for large-region generation",
     )
+    oriented_region: Optional[OrientedRegion] = Field(
+        default=None,
+        description="Oriented region (center + dimensions + rotation). Preferred over region + orientation.",
+    )
 
     # Paths (set when loading from file)
     project_dir: Optional[Path] = Field(default=None, exclude=True)
+
+    @property
+    def effective_region(self) -> BoundingBox:
+        """The logical region (unrotated) for display and coordinate mapping.
+
+        If oriented_region is set, derives the axis-aligned bbox from it.
+        Otherwise falls back to the raw region field (backward compat).
+        """
+        if self.oriented_region is not None:
+            return self.oriented_region.to_axis_aligned_bbox()
+        return self.region
+
+    @property
+    def generation_bbox(self) -> BoundingBox:
+        """The expanded axis-aligned bbox used for tile generation.
+
+        Covers the full rotated region so tiles can be assembled then cropped.
+        """
+        if self.oriented_region is not None:
+            return self.oriented_region.to_generation_bbox()
+        rotation = self.style.effective_rotation_degrees
+        if rotation % 360 != 0:
+            return self.region.expanded_for_rotation(rotation)
+        return self.region
 
     @classmethod
     def from_yaml(cls, path: Path) -> "Project":

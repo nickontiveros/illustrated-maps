@@ -3,6 +3,7 @@
 from .project import (
     Project,
     BoundingBox,
+    OrientedRegion,
     OutputSettings,
     StyleSettings,
     TileSettings,
@@ -21,6 +22,7 @@ from .outpaint_region import OutpaintRegion, HorizonTile, TerrainContext, Region
 __all__ = [
     "Project",
     "BoundingBox",
+    "OrientedRegion",
     "OutputSettings",
     "StyleSettings",
     "TileSettings",

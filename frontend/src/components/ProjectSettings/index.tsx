@@ -6,7 +6,9 @@ import type {
   StyleSettings,
   BorderSettings,
   NarrativeSettings,
+  OrientedRegion,
 } from '@/types';
+import RegionDrawer from '@/components/RegionDrawer';
 
 type ProjectDetail = import('@/types').ProjectDetail;
 
@@ -201,6 +203,36 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
   const [narrativeMaxLandmarks, setNarrativeMaxLandmarks] = useState(project.narrative?.max_landmarks ?? 50);
   const [narrativeMinScore, setNarrativeMinScore] = useState(project.narrative?.min_importance_score ?? 0.3);
 
+  // Region editing modal
+  const [showRegionModal, setShowRegionModal] = useState(false);
+  const [editingRegion, setEditingRegion] = useState<OrientedRegion | null>(null);
+  const [editingRotation, setEditingRotation] = useState(0);
+
+  // Initialize region editor when modal opens
+  useEffect(() => {
+    if (!showRegionModal) return;
+    if (project.oriented_region) {
+      setEditingRegion({ ...project.oriented_region });
+      setEditingRotation(project.oriented_region.rotation_deg);
+    } else {
+      // Derive from bbox + orientation for legacy projects
+      const r = project.region;
+      const centerLat = (r.north + r.south) / 2;
+      const centerLon = (r.east + r.west) / 2;
+      const widthKm = (r.east - r.west) * 111.32 * Math.cos((centerLat * Math.PI) / 180);
+      const heightKm = (r.north - r.south) * 111.32;
+      const rot = project.style.orientation_degrees ?? 0;
+      setEditingRegion({
+        center_lat: centerLat,
+        center_lon: centerLon,
+        width_km: widthKm,
+        height_km: heightKm,
+        rotation_deg: rot,
+      });
+      setEditingRotation(rot);
+    }
+  }, [showRegionModal]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Reset form when project changes
   useEffect(() => {
     setTitle(project.title ?? '');
@@ -386,6 +418,11 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
 
       {/* Orientation Section */}
       <Section title="Map Orientation" defaultOpen={false}>
+        {project.oriented_region && (
+          <p className="text-xs text-slate-400 -mt-1">
+            Rotation is stored in the oriented region. Changes here sync automatically.
+          </p>
+        )}
         <div>
           <label className="block text-sm text-slate-500 mb-1">Cardinal Direction</label>
           <select
@@ -549,16 +586,30 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
         </div>
       </Section>
 
-      {/* Info sections (read-only) */}
+      {/* Region Section */}
       <Section title="Region" defaultOpen={false}>
         <div className="bg-slate-50 rounded-lg p-3 text-sm">
-          <div className="grid grid-cols-2 gap-2">
-            <div>North: {project.region.north.toFixed(4)}</div>
-            <div>South: {project.region.south.toFixed(4)}</div>
-            <div>East: {project.region.east.toFixed(4)}</div>
-            <div>West: {project.region.west.toFixed(4)}</div>
-          </div>
+          {project.oriented_region ? (
+            <div className="space-y-1">
+              <div>Center: {project.oriented_region.center_lat.toFixed(4)}, {project.oriented_region.center_lon.toFixed(4)}</div>
+              <div>{project.oriented_region.width_km.toFixed(1)} km x {project.oriented_region.height_km.toFixed(1)} km</div>
+              <div>Rotation: {project.oriented_region.rotation_deg}°</div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <div>North: {project.region.north.toFixed(4)}</div>
+              <div>South: {project.region.south.toFixed(4)}</div>
+              <div>East: {project.region.east.toFixed(4)}</div>
+              <div>West: {project.region.west.toFixed(4)}</div>
+            </div>
+          )}
         </div>
+        <button
+          onClick={() => setShowRegionModal(true)}
+          className="w-full px-3 py-2 text-sm border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50"
+        >
+          Edit Region
+        </button>
       </Section>
 
       <Section title="Output" defaultOpen={false}>
@@ -585,6 +636,65 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
 
       {/* Cache Management */}
       <CacheManagement projectName={project.name} />
+
+      {/* Region Edit Modal */}
+      {showRegionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <h2 className="text-lg font-semibold mb-4">Edit Region</h2>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Rotation: {editingRotation}°
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={359}
+                  value={editingRotation}
+                  onChange={(e) => setEditingRotation(parseInt(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+
+              <RegionDrawer
+                value={editingRegion}
+                onChange={setEditingRegion}
+                rotation={editingRotation}
+              />
+
+              {editingRegion && (
+                <div className="text-sm text-slate-500 flex gap-4">
+                  <span>{editingRegion.width_km.toFixed(1)} km wide</span>
+                  <span>{editingRegion.height_km.toFixed(1)} km tall</span>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setShowRegionModal(false)}
+                className="px-4 py-2 text-slate-600 hover:text-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!editingRegion) return;
+                  await updateProject.mutateAsync({ oriented_region: editingRegion });
+                  setOrientationDegrees(editingRegion.rotation_deg);
+                  setShowRegionModal(false);
+                }}
+                disabled={!editingRegion || updateProject.isPending}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {updateProject.isPending ? 'Saving...' : 'Save Region'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Save button */}
       {isDirty && (

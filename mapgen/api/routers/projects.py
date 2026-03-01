@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from ...config import get_config
-from ...models.project import Project
+from ...models.project import Project, StyleSettings
 from ..schemas import (
     ErrorResponse,
     ProjectCreate,
@@ -149,14 +149,32 @@ async def create_project(request: ProjectCreate):
             detail=f"Project '{request.name}' already exists"
         )
 
+    # Validate that at least one of region or oriented_region is provided
+    if request.region is None and request.oriented_region is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Either 'region' or 'oriented_region' must be provided"
+        )
+
     # Create project with provided settings or defaults
     project_kwargs: dict = {
         "name": request.name,
-        "region": request.region,
     }
+
+    if request.oriented_region is not None:
+        project_kwargs["oriented_region"] = request.oriented_region
+        # Derive axis-aligned region from oriented_region for backward compat
+        project_kwargs["region"] = request.oriented_region.to_axis_aligned_bbox()
+        # Sync orientation_degrees into style
+        style = request.style or StyleSettings()
+        style.orientation_degrees = request.oriented_region.rotation_deg
+        project_kwargs["style"] = style
+    else:
+        project_kwargs["region"] = request.region
+
     if request.output is not None:
         project_kwargs["output"] = request.output
-    if request.style is not None:
+    if request.style is not None and "style" not in project_kwargs:
         project_kwargs["style"] = request.style
     if request.tiles is not None:
         project_kwargs["tiles"] = request.tiles
@@ -187,10 +205,19 @@ async def update_project(name: str, request: ProjectUpdate):
     project = load_project(name)
 
     # Update fields that were provided
+    if request.oriented_region is not None:
+        project.oriented_region = request.oriented_region
+        # Recompute axis-aligned region from oriented_region
+        project.region = request.oriented_region.to_axis_aligned_bbox()
+        # Sync rotation into style
+        project.style.orientation_degrees = request.oriented_region.rotation_deg
     if request.output is not None:
         project.output = request.output
     if request.style is not None:
         project.style = request.style
+        # If style orientation changed and we have an oriented_region, sync it
+        if project.oriented_region is not None and request.style.orientation_degrees is not None:
+            project.oriented_region.rotation_deg = request.style.orientation_degrees
     if request.tiles is not None:
         project.tiles = request.tiles
     if request.title is not None:

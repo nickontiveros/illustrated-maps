@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .config import get_config
-from .models.project import BoundingBox, CardinalDirection, DetailLevel, Project, get_recommended_detail_level
+from .models.project import BoundingBox, CardinalDirection, DetailLevel, OrientedRegion, Project, get_recommended_detail_level
 
 
 def timestamped_filename(base_name: str, extension: str = "png") -> str:
@@ -163,6 +163,8 @@ def generate(
 @click.option("--west", type=float, required=True, help="West longitude")
 @click.option("--orientation", type=click.Choice(["north", "south", "east", "west"]),
               default="north", help="Which direction is 'up' on the map (default: north)")
+@click.option("--rotation", type=float, default=0.0,
+              help="Arbitrary rotation in degrees clockwise from north (overrides --orientation)")
 @click.option("--output", "-o", type=click.Path(), help="Output directory")
 def init(
     name: str,
@@ -171,6 +173,7 @@ def init(
     east: float,
     west: float,
     orientation: str,
+    rotation: float,
     output: Optional[str],
 ):
     """Initialize a new map project."""
@@ -179,11 +182,30 @@ def init(
     output_dir = Path(output) if output else Path.cwd() / name.replace(" ", "_").lower()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    project = Project(
-        name=name,
-        region=BoundingBox(north=north, south=south, east=east, west=west),
-        style=StyleSettings(orientation=CardinalDirection(orientation)),
-    )
+    bbox = BoundingBox(north=north, south=south, east=east, west=west)
+
+    # Determine effective rotation
+    effective_rotation = rotation
+    if rotation == 0.0 and orientation != "north":
+        effective_rotation = CardinalDirection(orientation).rotation_degrees
+
+    # Build style settings
+    style_kwargs: dict = {"orientation": CardinalDirection(orientation)}
+    if effective_rotation != 0.0:
+        style_kwargs["orientation_degrees"] = effective_rotation
+
+    project_kwargs: dict = {
+        "name": name,
+        "region": bbox,
+        "style": StyleSettings(**style_kwargs),
+    }
+
+    # When rotation is specified, also create an OrientedRegion
+    if effective_rotation != 0.0:
+        oriented = OrientedRegion.from_bbox_and_orientation(bbox, effective_rotation)
+        project_kwargs["oriented_region"] = oriented
+
+    project = Project(**project_kwargs)
     project.project_dir = output_dir
 
     # Save project file
@@ -194,7 +216,10 @@ def init(
     project.ensure_directories()
 
     console.print(f"[green]Created project:[/green] {project_file}")
-    console.print(f"[dim]Orientation:[/dim] {orientation} is up")
+    if effective_rotation != 0.0:
+        console.print(f"[dim]Rotation:[/dim] {effective_rotation}° clockwise from north")
+    else:
+        console.print(f"[dim]Orientation:[/dim] {orientation} is up")
     console.print(f"[dim]Add landmark photos to:[/dim] {project.landmarks_dir}")
     console.print(f"[dim]Add logo PNGs to:[/dim] {project.logos_dir}")
 
@@ -952,7 +977,9 @@ def clear_cache(project_path: str, tiles_only: bool, clear_all: bool):
 @main.command()
 @click.argument("project_path", type=click.Path(exists=True))
 @click.argument("direction", type=click.Choice(["north", "south", "east", "west"]))
-def set_orientation(project_path: str, direction: str):
+@click.option("--degrees", type=float, default=None,
+              help="Arbitrary rotation in degrees (overrides cardinal direction)")
+def set_orientation(project_path: str, direction: str, degrees: Optional[float]):
     """Set which cardinal direction is 'up' on the map.
 
     This affects how the map is rendered - the specified direction will
@@ -961,21 +988,33 @@ def set_orientation(project_path: str, direction: str):
     Examples:
         mapgen set-orientation projects/tokyo/ east
         mapgen set-orientation projects/sf/ south
+        mapgen set-orientation projects/sf/ north --degrees 45
     """
     project_file = Path(project_path)
     if project_file.is_dir():
         project_file = project_file / "project.yaml"
 
     project = Project.from_yaml(project_file)
-    old_orientation = project.style.orientation.value
+    old_rotation = project.style.effective_rotation_degrees
 
     project.style.orientation = CardinalDirection(direction)
+    effective_degrees = degrees if degrees is not None else CardinalDirection(direction).rotation_degrees
+    if degrees is not None:
+        project.style.orientation_degrees = degrees
+
+    # Sync oriented_region if it exists
+    if project.oriented_region is not None:
+        project.oriented_region.rotation_deg = float(effective_degrees)
+        # Recompute axis-aligned bbox
+        project.region = project.oriented_region.to_axis_aligned_bbox()
+
     project.to_yaml(project_file)
 
+    new_rotation = project.style.effective_rotation_degrees
     console.print(f"[green]Updated orientation for {project.name}[/green]")
-    console.print(f"  {old_orientation} → {direction}")
+    console.print(f"  {old_rotation}° → {new_rotation}°")
 
-    if old_orientation != direction:
+    if old_rotation != new_rotation:
         console.print(f"\n[yellow]Note:[/yellow] You should clear the cache and regenerate tiles:")
         console.print(f"  mapgen clear-cache {project_path}")
 

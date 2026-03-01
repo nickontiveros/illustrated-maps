@@ -50,7 +50,8 @@ export const api = {
 
   async createProject(data: {
     name: string;
-    region: import('@/types').BoundingBox;
+    region?: import('@/types').BoundingBox;
+    oriented_region?: import('@/types').OrientedRegion;
     output?: import('@/types').OutputSettings;
     style?: import('@/types').StyleSettings;
     tiles?: import('@/types').TileSettings;
@@ -67,6 +68,7 @@ export const api = {
     output?: import('@/types').OutputSettings;
     style?: import('@/types').StyleSettings;
     tiles?: import('@/types').TileSettings;
+    oriented_region?: import('@/types').OrientedRegion;
     title?: string;
     subtitle?: string;
     border?: import('@/types').BorderSettings;
