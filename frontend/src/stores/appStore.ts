@@ -40,6 +40,15 @@ interface AppState {
   // Finalized map state
   finalizedStage: string | null;
   setFinalizedStage: (stage: string | null) => void;
+
+  // 3D perspective preview state
+  perspectivePreview: boolean;
+  setPerspectivePreview: (enabled: boolean) => void;
+  previewTilt: number;
+  previewRotation: number;
+  setPreviewTilt: (tilt: number) => void;
+  setPreviewRotation: (rotation: number) => void;
+  resetPerspectivePreview: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -86,4 +95,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   finalizedStage: null,
   setFinalizedStage: (stage) => set({ finalizedStage: stage }),
+
+  perspectivePreview: false,
+  setPerspectivePreview: (enabled) => set({ perspectivePreview: enabled }),
+  previewTilt: 45,
+  previewRotation: 0,
+  setPreviewTilt: (tilt) => set({ previewTilt: tilt }),
+  setPreviewRotation: (rotation) => set({ previewRotation: rotation }),
+  resetPerspectivePreview: () => set({ previewTilt: 45, previewRotation: 0 }),
 }));

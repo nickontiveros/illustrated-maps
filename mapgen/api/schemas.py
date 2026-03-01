@@ -442,9 +442,19 @@ class PostProcessStatus(BaseModel):
     assembled: bool = False
     composed: bool = False
     labeled: bool = False
+    perspective: bool = False
     bordered: bool = False
     outpainted: bool = False
     latest_stage: Optional[str] = None
+
+
+class PerspectiveRequest(BaseModel):
+    """Parameters for perspective (bird's eye view) transformation."""
+
+    angle: float = Field(default=35.0, ge=10.0, le=80.0, description="Viewing angle in degrees from horizontal")
+    convergence: float = Field(default=0.7, ge=0.3, le=1.0, description="How much top edge narrows (1.0 = no change)")
+    vertical_scale: float = Field(default=0.4, ge=0.1, le=1.0, description="Vertical compression at top (1.0 = no change)")
+    horizon_margin: float = Field(default=0.15, ge=0.0, le=0.5, description="Extra space at top for sky (fraction of height)")
 
 
 class LabelsRequest(BaseModel):

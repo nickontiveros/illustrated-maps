@@ -297,12 +297,13 @@ export interface APIConfig {
 }
 
 // Post-processing types
-export type PostProcessStage = 'assembled' | 'composed' | 'labeled' | 'bordered' | 'outpainted';
+export type PostProcessStage = 'assembled' | 'composed' | 'labeled' | 'perspective' | 'bordered' | 'outpainted';
 
 export interface PostProcessStatus {
   assembled: boolean;
   composed: boolean;
   labeled: boolean;
+  perspective: boolean;
   bordered: boolean;
   outpainted: boolean;
   latest_stage: PostProcessStage | null;

@@ -31,6 +31,21 @@ export function useAddLabels(projectName: string) {
   });
 }
 
+export function useApplyPerspective(projectName: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params?: {
+      angle?: number;
+      convergence?: number;
+      vertical_scale?: number;
+      horizon_margin?: number;
+    }) => api.applyPerspective(projectName, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['postprocess-status', projectName] });
+    },
+  });
+}
+
 export function useAddBorder(projectName: string) {
   const queryClient = useQueryClient();
   return useMutation({
