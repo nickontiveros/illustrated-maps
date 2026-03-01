@@ -7,6 +7,7 @@ This service coordinates the full tiled map generation pipeline:
 4. Blend tiles together into final image
 """
 
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -812,9 +813,27 @@ class GenerationService:
         lon_step = region.width_degrees / cols
         lat_step = region.height_degrees / rows
 
+        # For rotated regions, expand the canvas so that after rotation the
+        # output rectangle is fully covered (no black corners).
+        rotation = self._rotation_degrees
+        needs_rotation = rotation != 0 and rotation % 360 != 0
+        if needs_rotation and rotation % 90 != 0:
+            theta = math.radians(abs(rotation))
+            cos_t = abs(math.cos(theta))
+            sin_t = abs(math.sin(theta))
+            canvas_w = math.ceil(output_config.width * cos_t + output_config.height * sin_t)
+            canvas_h = math.ceil(output_config.width * sin_t + output_config.height * cos_t)
+        elif needs_rotation:
+            # Exact 90° multiples: canvas dims are just a transpose of output
+            canvas_w = output_config.width
+            canvas_h = output_config.height
+        else:
+            canvas_w = output_config.width
+            canvas_h = output_config.height
+
         # Each tile's contribution is one grid cell. Use uniform pixel size per cell.
-        cell_w = round(output_config.width / cols)
-        cell_h = round(output_config.height / rows)
+        cell_w = round(canvas_w / cols)
+        cell_h = round(canvas_h / rows)
         out_w = cell_w * cols
         out_h = cell_h * rows
 
@@ -872,8 +891,23 @@ class GenerationService:
 
             assembled.paste(cropped, (paste_x, paste_y))
 
-        # Scale to desired output dimensions if different
-        if (out_w, out_h) != (output_config.width, output_config.height):
+        # Apply orientation rotation and crop for oriented regions
+        if needs_rotation:
+            # Rotate around center (negative because PIL rotates counter-clockwise)
+            assembled = assembled.rotate(
+                -rotation,
+                resample=Image.Resampling.BICUBIC,
+                expand=False,
+                fillcolor=(0, 0, 0, 0) if assembled.mode == "RGBA" else None,
+            )
+            # Crop to final output dimensions from center
+            cx, cy = assembled.width // 2, assembled.height // 2
+            final_w, final_h = output_config.width, output_config.height
+            left = cx - final_w // 2
+            top = cy - final_h // 2
+            assembled = assembled.crop((left, top, left + final_w, top + final_h))
+        elif (out_w, out_h) != (output_config.width, output_config.height):
+            # Non-rotated: scale to desired output dimensions if rounding differs
             assembled = assembled.resize(
                 (output_config.width, output_config.height),
                 Image.Resampling.LANCZOS,
@@ -899,23 +933,6 @@ class GenerationService:
                 horizon_margin=0.15,
             )
             assembled = perspective.transform_image(assembled)
-
-        # Apply orientation rotation and crop for oriented regions
-        rotation = self._rotation_degrees
-        if rotation != 0 and rotation % 360 != 0:
-            # Rotate around center (negative because PIL rotates counter-clockwise)
-            assembled = assembled.rotate(
-                -rotation,
-                resample=Image.Resampling.BICUBIC,
-                expand=False,
-                fillcolor=(0, 0, 0, 0) if assembled.mode == "RGBA" else None,
-            )
-            # Crop to final output dimensions from center
-            cx, cy = assembled.width // 2, assembled.height // 2
-            final_w, final_h = output_config.width, output_config.height
-            left = cx - final_w // 2
-            top = cy - final_h // 2
-            assembled = assembled.crop((left, top, left + final_w, top + final_h))
 
         return assembled
 

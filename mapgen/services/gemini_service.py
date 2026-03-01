@@ -212,9 +212,15 @@ class GeminiService:
         # Build prompt
         if style_reference:
             prompt = (
-                "The first image is a satellite/map reference showing the geography to illustrate. "
-                "The second image is a style reference - match its illustrated style, color palette, "
-                "line quality, and artistic approach exactly. "
+                "You are given two images.\n"
+                "IMAGE 1 (satellite/map): Shows the exact geography you must illustrate — "
+                "every road, coastline, water body, park, and building must match this image.\n"
+                "IMAGE 2 (style reference): Shows the artistic style to emulate — match its "
+                "color palette, line quality, and hand-illustrated aesthetic.\n\n"
+                "CRITICAL: Only copy GEOGRAPHY from Image 1 (the satellite image). "
+                "Only copy STYLE from Image 2 (the style reference). "
+                "Do NOT reproduce any geographic features, roads, or landmarks from the style reference. "
+                "The style reference is from a different location.\n\n"
             )
             prompt += style_prompt or self.STYLE_PROMPTS["base_map"]
         else:
@@ -233,7 +239,7 @@ class GeminiService:
         if style_reference:
             prompt += (
                 "\n\nIMPORTANT: Follow the road widths and positions shown in "
-                "the reference image closely. Roads should be clearly visible "
+                "the satellite image (Image 1) closely. Roads should be clearly visible "
                 "paths with consistent width hierarchy."
             )
 
