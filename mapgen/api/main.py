@@ -82,20 +82,24 @@ async def debug_volume():
     except Exception as e:
         results["df_error"] = str(e)
 
-    # Check several candidate paths
-    for check_path in ["/app/data", "/app/projects", "/data", "/app"]:
-        p = Path(check_path)
-        if p.exists():
+    # Walk /app/data up to depth 4
+    base = Path("/app/data")
+    entries = []
+    for root, dirs, files in _os.walk(base):
+        depth = root.replace(str(base), "").count(_os.sep)
+        if depth > 3:
+            dirs.clear()
+            continue
+        for d in dirs:
+            entries.append({"path": str(Path(root) / d), "type": "dir"})
+        for f in files:
+            fp = Path(root) / f
             try:
-                contents = list(p.iterdir())
-                results[check_path] = {
-                    "exists": True,
-                    "contents": [{"name": c.name, "is_dir": c.is_dir()} for c in contents],
-                }
-            except Exception as e:
-                results[check_path] = {"exists": True, "error": str(e)}
-        else:
-            results[check_path] = {"exists": False}
+                size = fp.stat().st_size
+            except Exception:
+                size = -1
+            entries.append({"path": str(fp), "type": "file", "size": size})
+    results["volume_contents"] = entries
 
     # Env vars
     results["env"] = {
