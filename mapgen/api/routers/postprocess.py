@@ -21,6 +21,7 @@ from ..schemas import (
     GenerationStartResponse,
     GenerationStatus,
     LabelsRequest,
+    PerspectiveRequest,
     PipelineRequest,
     PostProcessStatus,
     SuccessResponse,
@@ -36,12 +37,13 @@ STAGE_FILES = {
     "assembled": "assembled.png",
     "composed": "composed.png",
     "labeled": "labeled.png",
+    "perspective": "perspective.png",
     "bordered": "bordered.png",
     "outpainted": "outpainted.png",
 }
 
-# Stage order for finding the latest available input
-STAGE_ORDER = ["outpainted", "bordered", "labeled", "composed", "assembled"]
+# Stage order for finding the latest available input (reverse pipeline order)
+STAGE_ORDER = ["outpainted", "bordered", "perspective", "labeled", "composed", "assembled"]
 
 
 def get_output_dir(project: Project) -> Path:
@@ -112,6 +114,7 @@ async def get_postprocess_status(name: str):
         assembled=stages["assembled"],
         composed=stages["composed"],
         labeled=stages["labeled"],
+        perspective=stages["perspective"],
         bordered=stages["bordered"],
         outpainted=stages["outpainted"],
         latest_stage=latest,
@@ -251,6 +254,69 @@ async def add_border(name: str):
     return SuccessResponse(message="Border added successfully")
 
 
+@router.post("/{name}/postprocess/perspective", response_model=SuccessResponse)
+async def apply_perspective(name: str, request: Optional[PerspectiveRequest] = None):
+    """Apply bird's eye perspective transformation to the map."""
+    project = load_project(name)
+    base_image = load_stage_image(project, before_stage="perspective")
+
+    params = request or PerspectiveRequest()
+
+    def do_perspective():
+        from ...services.perspective_service import PerspectiveService
+
+        service = PerspectiveService(
+            angle=params.angle,
+            convergence=params.convergence,
+            vertical_scale=params.vertical_scale,
+            horizon_margin=params.horizon_margin,
+        )
+        return service.transform_image(base_image)
+
+    result = await asyncio.to_thread(do_perspective)
+
+    output_path = get_stage_path(project, "perspective")
+    result.save(output_path)
+
+    return SuccessResponse(message="Perspective transformation applied")
+
+
+@router.post("/{name}/postprocess/perspective/preview")
+async def preview_perspective(
+    name: str,
+    request: Optional[PerspectiveRequest] = None,
+    size: Optional[int] = Query(800, description="Max dimension for preview thumbnail"),
+):
+    """Preview perspective transform without saving (returns image directly)."""
+    project = load_project(name)
+    base_image = load_stage_image(project, before_stage="perspective")
+
+    params = request or PerspectiveRequest()
+
+    def do_perspective():
+        from ...services.perspective_service import PerspectiveService
+
+        # Downscale for preview if needed
+        img = base_image
+        if size and max(img.size) > size:
+            img.thumbnail((size, size))
+
+        service = PerspectiveService(
+            angle=params.angle,
+            convergence=params.convergence,
+            vertical_scale=params.vertical_scale,
+            horizon_margin=params.horizon_margin,
+        )
+        return service.transform_image(img)
+
+    result = await asyncio.to_thread(do_perspective)
+
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="image/png")
+
+
 # =============================================================================
 # Async post-processing steps (long-running)
 # =============================================================================
@@ -317,7 +383,7 @@ async def start_pipeline(
     """Run selected post-processing steps sequentially."""
     project = load_project(name)
 
-    valid_steps = {"compose", "labels", "border", "outpaint"}
+    valid_steps = {"compose", "labels", "perspective", "border", "outpaint"}
     invalid = set(request.steps) - valid_steps
     if invalid:
         raise HTTPException(status_code=400, detail=f"Invalid steps: {invalid}")
@@ -389,6 +455,17 @@ async def start_pipeline(
 
                     result = await asyncio.to_thread(do_labels)
                     result.save(get_stage_path(project, "labeled"))
+
+            elif step == "perspective":
+                base = load_stage_image(project, before_stage="perspective")
+
+                def do_perspective():
+                    from ...services.perspective_service import PerspectiveService
+                    svc = PerspectiveService()
+                    return svc.transform_image(base)
+
+                result = await asyncio.to_thread(do_perspective)
+                result.save(get_stage_path(project, "perspective"))
 
             elif step == "border":
                 if project.border and project.border.enabled:

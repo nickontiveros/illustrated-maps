@@ -509,6 +509,23 @@ export const api = {
     return handleResponse<import('@/types').GenerationStartResponse>(response);
   },
 
+  async applyPerspective(projectName: string, params?: {
+    angle?: number;
+    convergence?: number;
+    vertical_scale?: number;
+    horizon_margin?: number;
+  }) {
+    const response = await fetch(
+      `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/perspective`,
+      {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify(params ?? {}),
+      }
+    );
+    return handleResponse<import('@/types').SuccessResponse>(response);
+  },
+
   getPostProcessImageUrl(projectName: string, stage: string, size?: number) {
     const params = size ? `?size=${size}` : '';
     return `${API_BASE}/projects/${encodeURIComponent(projectName)}/postprocess/${stage}/image${params}`;
