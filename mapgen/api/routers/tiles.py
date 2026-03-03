@@ -493,6 +493,7 @@ async def start_generation(
             results, final_progress = await asyncio.to_thread(
                 service.generate_all_tiles,
                 progress_callback=progress_callback,
+                skip_l2=request.skip_l2,
             )
 
             return results, final_progress

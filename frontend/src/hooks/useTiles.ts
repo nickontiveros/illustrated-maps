@@ -49,7 +49,7 @@ export function useStartGeneration(projectName: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (options?: { skip_existing?: boolean; tile_filter?: [number, number][] }) =>
+    mutationFn: (options?: { skip_existing?: boolean; tile_filter?: [number, number][]; skip_l2?: boolean }) =>
       api.startGeneration(projectName, options),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project', projectName, 'generation'] });

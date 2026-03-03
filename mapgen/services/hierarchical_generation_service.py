@@ -309,6 +309,17 @@ class HierarchicalGenerationService:
             path.parent.mkdir(parents=True, exist_ok=True)
             image.save(path)
 
+        # For L2 tiles, also save to the flat cache path so the existing
+        # tile preview API can serve them during generation.
+        if level == 2 and self.cache_dir:
+            global_col = parent_col * self.L2_COLS + col
+            global_row = parent_row * self.L2_ROWS + row
+            flat_dir = self.cache_dir / "generated"
+            flat_dir.mkdir(parents=True, exist_ok=True)
+            flat_path = flat_dir / f"tile_{global_col}_{global_row}.png"
+            image.save(flat_path)
+            logger.debug("Also saved to flat cache: %s", flat_path)
+
     # -- Generation phases --
 
     def generate_overview(
@@ -339,12 +350,6 @@ class HierarchicalGenerationService:
             progress_callback("Fetching overview reference...")
 
         reference = self._fetch_reference(region, (ov_w, ov_h))
-
-        # Save reference for debugging
-        if self.cache_dir:
-            ref_path = self.cache_dir / "hierarchical" / "overview_ref.png"
-            ref_path.parent.mkdir(parents=True, exist_ok=True)
-            reference.save(ref_path)
 
         terrain_desc = self._get_terrain_description(region)
 
@@ -402,12 +407,6 @@ class HierarchicalGenerationService:
                     progress_callback(f"Fetching L1 reference ({col},{row})...")
 
                 reference = self._fetch_reference(tile_bbox, (TILE_SIZE, TILE_SIZE))
-
-                # Save reference for debugging
-                if self.cache_dir:
-                    ref_path = self.cache_dir / "hierarchical" / f"L1_{col}_{row}_ref.png"
-                    ref_path.parent.mkdir(parents=True, exist_ok=True)
-                    reference.save(ref_path)
 
                 terrain_desc = self._get_terrain_description(tile_bbox)
 
@@ -504,12 +503,6 @@ class HierarchicalGenerationService:
                             progress_callback(f"Fetching L2 reference ({l1_col},{l1_row})->({l2_col},{l2_row})...")
 
                         reference = self._fetch_reference(tile_bbox, (TILE_SIZE, TILE_SIZE))
-
-                        # Save reference for debugging
-                        if self.cache_dir:
-                            ref_path = self.cache_dir / "hierarchical" / f"L2_{l1_col}_{l1_row}_{l2_col}_{l2_row}_ref.png"
-                            ref_path.parent.mkdir(parents=True, exist_ok=True)
-                            reference.save(ref_path)
 
                         terrain_desc = self._get_terrain_description(tile_bbox)
 
@@ -668,6 +661,77 @@ class HierarchicalGenerationService:
 
         return assembled
 
+    def _assemble_l1(
+        self,
+        medium_tiles: list[list[Optional[Image.Image]]],
+        l1_grid: list[list[BoundingBox]],
+    ) -> Optional[Image.Image]:
+        """Assemble L1 medium tiles directly (quick-test / skip_l2 mode).
+
+        Uses the same contribution-cell logic as assemble() but for a 2×3 grid.
+        """
+        region = self.project.generation_bbox
+        output = self.project.output
+        canvas_w, canvas_h = self.project.canvas_size
+
+        cell_w = round(canvas_w / self.L1_COLS)
+        cell_h = round(canvas_h / self.L1_ROWS)
+        out_w = cell_w * self.L1_COLS
+        out_h = cell_h * self.L1_ROWS
+
+        lon_step = region.width_degrees / self.L1_COLS
+        lat_step = region.height_degrees / self.L1_ROWS
+
+        assembled = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+
+        for row in range(self.L1_ROWS):
+            for col in range(self.L1_COLS):
+                tile_img = medium_tiles[row][col]
+                if tile_img is None:
+                    continue
+
+                tile_bbox = l1_grid[row][col]
+
+                if tile_img.width != TILE_SIZE or tile_img.height != TILE_SIZE:
+                    tile_img = tile_img.resize((TILE_SIZE, TILE_SIZE), Image.Resampling.LANCZOS)
+
+                # Contribution cell
+                contrib_west = region.west + col * lon_step
+                contrib_east = region.west + (col + 1) * lon_step
+                contrib_north = region.north - row * lat_step
+                contrib_south = region.north - (row + 1) * lat_step
+
+                tile_geo_w = tile_bbox.east - tile_bbox.west
+                tile_geo_h = tile_bbox.north - tile_bbox.south
+                if tile_geo_w <= 0 or tile_geo_h <= 0:
+                    continue
+
+                crop_left = round((contrib_west - tile_bbox.west) / tile_geo_w * tile_img.width)
+                crop_top = round((tile_bbox.north - contrib_north) / tile_geo_h * tile_img.height)
+                crop_right = round((tile_bbox.east - contrib_east) / tile_geo_w * tile_img.width)
+                crop_bottom = round((contrib_south - tile_bbox.south) / tile_geo_h * tile_img.height)
+
+                crop_left = max(0, crop_left)
+                crop_top = max(0, crop_top)
+                crop_right = max(0, crop_right)
+                crop_bottom = max(0, crop_bottom)
+
+                cropped = tile_img.crop((
+                    crop_left, crop_top,
+                    tile_img.width - crop_right,
+                    tile_img.height - crop_bottom,
+                ))
+                cropped = cropped.resize((cell_w, cell_h), Image.Resampling.LANCZOS)
+                assembled.paste(cropped, (col * cell_w, row * cell_h))
+
+        if (out_w, out_h) != (output.width, output.height):
+            assembled = assembled.resize(
+                (output.width, output.height),
+                Image.Resampling.LANCZOS,
+            )
+
+        return assembled
+
     # -- Main orchestrator --
 
     def generate_all_tiles(
@@ -675,6 +739,7 @@ class HierarchicalGenerationService:
         progress_callback: Optional[Callable] = None,
         max_retries: int = 3,
         style_reference: Optional[Image.Image] = None,
+        skip_l2: bool = False,
     ) -> tuple[list, HierarchicalProgress]:
         """Orchestrate the full hierarchical generation pipeline.
 
@@ -685,12 +750,17 @@ class HierarchicalGenerationService:
             progress_callback: Callback receiving HierarchicalProgress updates.
             max_retries: Max retries per tile (used for retry wrapper).
             style_reference: Ignored (hierarchical mode generates its own reference).
+            skip_l2: If True, only generate L0 overview + L1 medium tiles (7
+                     calls instead of 31). Useful for quick iteration to validate
+                     style and geography before committing to the full run.
 
         Returns:
             Tuple of (fine_tiles list, progress). The fine_tiles list contains dicts
             but the API layer only uses this for tile counting.
         """
-        total = 1 + (self.L1_COLS * self.L1_ROWS) + (self.L1_COLS * self.L1_ROWS * self.L2_COLS * self.L2_ROWS)
+        l1_count = self.L1_COLS * self.L1_ROWS
+        l2_count = l1_count * self.L2_COLS * self.L2_ROWS
+        total = 1 + l1_count + (0 if skip_l2 else l2_count)
         progress = HierarchicalProgress(total_tiles=total)
 
         logger.info("Starting hierarchical generation: %d total calls", total)
@@ -757,11 +827,6 @@ class HierarchicalGenerationService:
                     illustration_crop = self._crop_illustration_for_tile(overview, region, tile_bbox)
                     reference = self._fetch_reference(tile_bbox, (TILE_SIZE, TILE_SIZE))
 
-                    if self.cache_dir:
-                        ref_path = self.cache_dir / "hierarchical" / f"L1_{c}_{r}_ref.png"
-                        ref_path.parent.mkdir(parents=True, exist_ok=True)
-                        reference.save(ref_path)
-
                     terrain_desc = self._get_terrain_description(tile_bbox)
 
                     if cb:
@@ -792,95 +857,111 @@ class HierarchicalGenerationService:
                 progress.phase_detail = f"Medium tiles ({l1_count}/{l1_total})"
                 update_progress()
 
-        # -- Phase 3: Fine tiles --
-        l2_total = self.L1_COLS * self.L1_ROWS * self.L2_COLS * self.L2_ROWS
-        progress.phase = "generating_fine"
-        progress.phase_detail = "Enhancing fine tiles..."
-        progress.phase_progress = (0, l2_total)
-        update_progress()
+        if skip_l2:
+            # Quick-test mode: assemble from L1 medium tiles directly
+            fine_tiles: list[dict] = []
+            region = self.project.generation_bbox
+            l1_grid = self._subdivide_bbox(region, self.L1_COLS, self.L1_ROWS)
+            for l1_row in range(self.L1_ROWS):
+                for l1_col in range(self.L1_COLS):
+                    fine_tiles.append({
+                        'image': medium_tiles[l1_row][l1_col],
+                        'l1_col': l1_col, 'l1_row': l1_row,
+                        'l2_col': 0, 'l2_row': 0,
+                        'bbox': l1_grid[l1_row][l1_col],
+                    })
 
-        region = self.project.generation_bbox
-        l1_grid = self._subdivide_bbox(region, self.L1_COLS, self.L1_ROWS)
-        fine_tiles: list[dict] = []
-        l2_count = 0
+            progress.phase = "assembling"
+            progress.phase_detail = "Assembling from L1 tiles (quick-test)..."
+            progress.phase_progress = None
+            update_progress()
 
-        for l1_row in range(self.L1_ROWS):
-            for l1_col in range(self.L1_COLS):
-                medium_img = medium_tiles[l1_row][l1_col]
-                l1_bbox = l1_grid[l1_row][l1_col]
-                l2_grid = self._subdivide_bbox(l1_bbox, self.L2_COLS, self.L2_ROWS)
+            assembled = self._assemble_l1(medium_tiles, l1_grid)
+        else:
+            # -- Phase 3: Fine tiles --
+            l2_total = self.L1_COLS * self.L1_ROWS * self.L2_COLS * self.L2_ROWS
+            progress.phase = "generating_fine"
+            progress.phase_detail = "Enhancing fine tiles..."
+            progress.phase_progress = (0, l2_total)
+            update_progress()
 
-                for l2_row in range(self.L2_ROWS):
-                    for l2_col in range(self.L2_COLS):
-                        tile_bbox = l2_grid[l2_row][l2_col]
-                        t0 = time.time()
+            region = self.project.generation_bbox
+            l1_grid = self._subdivide_bbox(region, self.L1_COLS, self.L1_ROWS)
+            fine_tiles = []
+            l2_count = 0
 
-                        def gen_l2(cb, mi=medium_img, lb=l1_bbox, tb=tile_bbox,
-                                   lc=l1_col, lr=l1_row, c=l2_col, r=l2_row):
-                            cached = self._load_cached(2, c, r, lc, lr)
-                            if cached is not None:
-                                return cached
+            for l1_row in range(self.L1_ROWS):
+                for l1_col in range(self.L1_COLS):
+                    medium_img = medium_tiles[l1_row][l1_col]
+                    l1_bbox = l1_grid[l1_row][l1_col]
+                    l2_grid = self._subdivide_bbox(l1_bbox, self.L2_COLS, self.L2_ROWS)
 
-                            if mi is None:
-                                return None
+                    for l2_row in range(self.L2_ROWS):
+                        for l2_col in range(self.L2_COLS):
+                            tile_bbox = l2_grid[l2_row][l2_col]
+                            t0 = time.time()
 
-                            illustration_crop = self._crop_illustration_for_tile(mi, lb, tb)
+                            def gen_l2(cb, mi=medium_img, lb=l1_bbox, tb=tile_bbox,
+                                       lc=l1_col, lr=l1_row, c=l2_col, r=l2_row):
+                                cached = self._load_cached(2, c, r, lc, lr)
+                                if cached is not None:
+                                    return cached
 
-                            global_col = lc * self.L2_COLS + c
-                            global_row = lr * self.L2_ROWS + r
-                            total_cols = self.L1_COLS * self.L2_COLS
-                            total_rows = self.L1_ROWS * self.L2_ROWS
-                            pos_desc = self._position_desc(global_col, global_row, total_cols, total_rows)
+                                if mi is None:
+                                    return None
 
-                            reference = self._fetch_reference(tb, (TILE_SIZE, TILE_SIZE))
+                                illustration_crop = self._crop_illustration_for_tile(mi, lb, tb)
 
-                            if self.cache_dir:
-                                ref_path = self.cache_dir / "hierarchical" / f"L2_{lc}_{lr}_{c}_{r}_ref.png"
-                                ref_path.parent.mkdir(parents=True, exist_ok=True)
-                                reference.save(ref_path)
+                                global_col = lc * self.L2_COLS + c
+                                global_row = lr * self.L2_ROWS + r
+                                total_cols = self.L1_COLS * self.L2_COLS
+                                total_rows = self.L1_ROWS * self.L2_ROWS
+                                pos_desc = self._position_desc(global_col, global_row, total_cols, total_rows)
 
-                            terrain_desc = self._get_terrain_description(tb)
+                                reference = self._fetch_reference(tb, (TILE_SIZE, TILE_SIZE))
 
-                            if cb:
-                                cb(f"Generating L2 ({lc},{lr})->({c},{r})...")
+                                terrain_desc = self._get_terrain_description(tb)
 
-                            result = self.gemini.generate_enhanced_tile(
-                                illustration_crop=illustration_crop,
-                                reference_image=reference,
-                                level="fine",
-                                terrain_description=terrain_desc,
-                                tile_position=pos_desc,
-                            )
-                            self._save_cached(result.image, 2, c, r, lc, lr)
-                            return result.image
+                                if cb:
+                                    cb(f"Generating L2 ({lc},{lr})->({c},{r})...")
 
-                        tile_img = self._generate_with_retries(gen_l2, max_retries=max_retries)
-                        progress.tile_times.append(time.time() - t0)
+                                result = self.gemini.generate_enhanced_tile(
+                                    illustration_crop=illustration_crop,
+                                    reference_image=reference,
+                                    level="fine",
+                                    terrain_description=terrain_desc,
+                                    tile_position=pos_desc,
+                                )
+                                self._save_cached(result.image, 2, c, r, lc, lr)
+                                return result.image
 
-                        fine_tiles.append({
-                            'image': tile_img,
-                            'l1_col': l1_col, 'l1_row': l1_row,
-                            'l2_col': l2_col, 'l2_row': l2_row,
-                            'bbox': tile_bbox,
-                        })
-                        l2_count += 1
+                            tile_img = self._generate_with_retries(gen_l2, max_retries=max_retries)
+                            progress.tile_times.append(time.time() - t0)
 
-                        if tile_img is None:
-                            progress.failed_tiles += 1
-                        else:
-                            progress.completed_tiles += 1
+                            fine_tiles.append({
+                                'image': tile_img,
+                                'l1_col': l1_col, 'l1_row': l1_row,
+                                'l2_col': l2_col, 'l2_row': l2_row,
+                                'bbox': tile_bbox,
+                            })
+                            l2_count += 1
 
-                        progress.phase_progress = (l2_count, l2_total)
-                        progress.phase_detail = f"Fine tiles ({l2_count}/{l2_total})"
-                        update_progress()
+                            if tile_img is None:
+                                progress.failed_tiles += 1
+                            else:
+                                progress.completed_tiles += 1
 
-        # -- Phase 4: Assemble --
-        progress.phase = "assembling"
-        progress.phase_detail = "Assembling final image..."
-        progress.phase_progress = None
-        update_progress()
+                            progress.phase_progress = (l2_count, l2_total)
+                            progress.phase_detail = f"Fine tiles ({l2_count}/{l2_total})"
+                            update_progress()
 
-        assembled = self.assemble(fine_tiles)
+            # -- Phase 4: Assemble --
+            progress.phase = "assembling"
+            progress.phase_detail = "Assembling final image..."
+            progress.phase_progress = None
+            update_progress()
+
+            assembled = self.assemble(fine_tiles)
 
         if assembled is not None and self.project.project_dir:
             output_dir = self.project.project_dir / "output"

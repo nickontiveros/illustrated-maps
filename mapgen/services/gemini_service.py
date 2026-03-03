@@ -98,31 +98,46 @@ class GeminiService:
             "Create clean edges suitable for subdivision."
         ),
         "enhance_medium": (
-            "ILLUSTRATION REFERENCE — match this artistic style, color palette, "
-            "line quality, and composition exactly. This shows the SAME geographic "
-            "area at lower resolution:\n"
+            "ILLUSTRATION REFERENCE — match ONLY the color palette and artistic "
+            "style from this image. It has been upscaled from a lower-resolution "
+            "overview, so road widths and feature sizes are exaggerated. "
+            "Use the SATELLITE image below for correct road widths, building "
+            "sizes, and geographic scale. This shows the SAME geographic area:\n"
         ),
         "enhance_medium_instruction": (
             "Enhance this map section with more geographic detail while preserving "
-            "the established style exactly. Add secondary roads, building clusters, "
-            "park interiors, and neighborhood texture. "
-            "The illustration reference and satellite image show the SAME area — "
-            "use the satellite for geographic accuracy and the illustration for style. "
-            "DO NOT change the color palette, line quality, or artistic approach. "
+            "the established color palette and artistic style. Add secondary roads, "
+            "building clusters, park interiors, and neighborhood texture. "
+            "\n\n"
+            "CRITICAL SCALE RULES:\n"
+            "- Road widths, building sizes, and feature proportions MUST match "
+            "the SATELLITE image, NOT the illustration reference.\n"
+            "- The illustration reference is upscaled from a lower-resolution "
+            "overview — its roads and features appear thicker than they should be.\n"
+            "- Copy ONLY colors, textures, and artistic approach from the "
+            "illustration. Copy ALL geographic scale from the satellite.\n"
+            "\n"
+            "DO NOT change the color palette or artistic approach. "
             "DO NOT include text labels or features not visible in the satellite image."
         ),
         "enhance_fine": (
-            "ILLUSTRATION REFERENCE — match this artistic style, color palette, "
-            "line quality, and composition exactly. This shows the SAME geographic "
-            "area at lower resolution:\n"
+            "ILLUSTRATION REFERENCE — match ONLY the color palette and artistic "
+            "style from this image. It is from the previous generation pass, so "
+            "use the SATELLITE image below for correct road widths, building "
+            "sizes, and geographic scale. This shows the SAME geographic area:\n"
         ),
         "enhance_fine_instruction": (
             "Add fine detail to this map section while preserving the established "
-            "style exactly. Add individual buildings, small streets, landscape "
-            "features, and architectural detail. "
-            "The illustration reference and satellite image show the SAME area — "
-            "use the satellite for geographic accuracy and the illustration for style. "
-            "DO NOT change the color palette, line quality, or artistic approach. "
+            "color palette and artistic style. Add individual buildings, small "
+            "streets, landscape features, and architectural detail. "
+            "\n\n"
+            "CRITICAL SCALE RULES:\n"
+            "- Road widths, building sizes, and feature proportions MUST match "
+            "the SATELLITE image, NOT the illustration reference.\n"
+            "- Copy ONLY colors, textures, and artistic approach from the "
+            "illustration. Copy ALL geographic scale from the satellite.\n"
+            "\n"
+            "DO NOT change the color palette or artistic approach. "
             "DO NOT include text labels or features not visible in the satellite image. "
             "Create clean edges suitable for seamless tiling."
         ),
@@ -488,9 +503,24 @@ class GeminiService:
         full_instruction = "".join(instruction_parts)
 
         max_size = self.MODELS.get(self.model, {}).get("max_size", 2048)
-        for img in [illustration_crop, reference_image]:
-            if img.width > max_size or img.height > max_size:
-                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        if reference_image.width > max_size or reference_image.height > max_size:
+            reference_image = reference_image.copy()
+            reference_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+        # Upscale illustration crop to match reference dimensions so Gemini
+        # gets a 1:1 pixel comparison (same geography, same size, different
+        # detail level).  Without this, small crops (e.g. 647×765) sent
+        # alongside 2048×2048 references confuse the model about target scale.
+        if (illustration_crop.width, illustration_crop.height) != (reference_image.width, reference_image.height):
+            logger.info(
+                "Upscaling illustration crop from %dx%d to %dx%d",
+                illustration_crop.width, illustration_crop.height,
+                reference_image.width, reference_image.height,
+            )
+            illustration_crop = illustration_crop.resize(
+                (reference_image.width, reference_image.height),
+                Image.Resampling.LANCZOS,
+            )
 
         start_time = time.time()
 

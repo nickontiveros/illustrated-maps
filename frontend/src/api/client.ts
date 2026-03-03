@@ -140,6 +140,7 @@ export const api = {
   async startGeneration(projectName: string, options?: {
     skip_existing?: boolean;
     tile_filter?: [number, number][];
+    skip_l2?: boolean;
   }) {
     const response = await fetch(
       `${API_BASE}/projects/${encodeURIComponent(projectName)}/generate`,

@@ -384,6 +384,11 @@ class GenerationStartRequest(BaseModel):
     tile_filter: Optional[list[tuple[int, int]]] = Field(
         default=None, description="Only generate these specific tiles"
     )
+    skip_l2: bool = Field(
+        default=False,
+        description="Hierarchical mode only: skip L2 fine tiles and assemble "
+        "from L1 medium tiles (7 calls instead of 31, for quick iteration)",
+    )
 
 
 class GenerationStartResponse(BaseModel):

@@ -4,6 +4,7 @@ import {
   useStartGeneration,
   useCancelGeneration,
 } from '@/hooks/useTiles';
+import { useProject } from '@/hooks/useProjects';
 import { useAppStore } from '@/stores/appStore';
 import type { GenerationProgress } from '@/types';
 
@@ -13,12 +14,14 @@ interface GenerationProps {
 
 function Generation({ projectName }: GenerationProps) {
   const { data: statusData } = useGenerationStatus(projectName);
+  const { data: project } = useProject(projectName);
   const startGeneration = useStartGeneration(projectName);
   const cancelGeneration = useCancelGeneration(projectName);
   const { activeGenerations, setActiveGeneration } = useAppStore();
 
   const [showModal, setShowModal] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const isHierarchical = project?.generation_mode === 'hierarchical';
 
   const activeGen = activeGenerations[projectName];
   const currentProgress: GenerationProgress | null =
@@ -30,10 +33,13 @@ function Generation({ projectName }: GenerationProps) {
     ? Math.round((currentProgress.completed_tiles / currentProgress.total_tiles) * 100)
     : 0;
 
-  const handleStart = async () => {
+  const handleStart = async (skipL2 = false) => {
     setStartError(null);
     try {
-      const result = await startGeneration.mutateAsync({ skip_existing: true });
+      const result = await startGeneration.mutateAsync({
+        skip_existing: true,
+        skip_l2: skipL2,
+      });
       setActiveGeneration(projectName, {
         taskId: result.task_id,
         projectName,
@@ -102,7 +108,7 @@ function Generation({ projectName }: GenerationProps) {
               </span>
             )}
             <button
-              onClick={handleStart}
+              onClick={() => handleStart(false)}
               disabled={startGeneration.isPending}
               className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
@@ -112,6 +118,16 @@ function Generation({ projectName }: GenerationProps) {
                 ? 'Retry'
                 : 'Generate'}
             </button>
+            {isHierarchical && (
+              <button
+                onClick={() => handleStart(true)}
+                disabled={startGeneration.isPending}
+                title="Quick test: L0 + L1 only (7 calls, ~3 min)"
+                className="px-4 py-2 bg-amber-500 text-white text-sm rounded-lg hover:bg-amber-600 disabled:opacity-50"
+              >
+                Quick Test
+              </button>
+            )}
           </div>
         )}
       </div>
