@@ -17,6 +17,7 @@ from ..models.project import (
     DetailLevel,
     FillRegion,
     FocusRegion,
+    GenerationMode,
     OrientedRegion,
     OutputSettings,
     Project,
@@ -63,6 +64,7 @@ class ProjectDetail(BaseModel):
     tile_count: int
     estimated_cost: Optional[float] = None
 
+    generation_mode: GenerationMode = GenerationMode.HIERARCHICAL
     title: Optional[str] = None
     subtitle: Optional[str] = None
     border: Optional[BorderSettings] = None
@@ -88,6 +90,7 @@ class ProjectDetail(BaseModel):
             grid_cols=cols,
             grid_rows=rows,
             tile_count=cols * rows,
+            generation_mode=project.generation_mode,
             title=project.title,
             subtitle=project.subtitle,
             border=project.border,
@@ -106,6 +109,7 @@ class ProjectCreate(BaseModel):
     tiles: Optional[TileSettings] = None
     title: Optional[str] = Field(None, max_length=200)
     subtitle: Optional[str] = Field(None, max_length=200)
+    generation_mode: Optional[GenerationMode] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -119,6 +123,7 @@ class ProjectUpdate(BaseModel):
     subtitle: Optional[str] = Field(None, max_length=200)
     border: Optional[BorderSettings] = None
     narrative: Optional[NarrativeSettings] = None
+    generation_mode: Optional[GenerationMode] = None
 
 
 # =============================================================================

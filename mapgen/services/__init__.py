@@ -15,6 +15,7 @@ from .landmark_service import LandmarkService
 from .outpainting_service import OutpaintingService
 from .distortion_service import DistortionService
 from .sectional_generation_service import SectionalGenerationService
+from .hierarchical_generation_service import HierarchicalGenerationService
 
 __all__ = [
     "OSMService",
@@ -32,4 +33,5 @@ __all__ = [
     "OutpaintingService",
     "DistortionService",
     "SectionalGenerationService",
+    "HierarchicalGenerationService",
 ]

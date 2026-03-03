@@ -73,6 +73,7 @@ export const api = {
     subtitle?: string;
     border?: import('@/types').BorderSettings;
     narrative?: import('@/types').NarrativeSettings;
+    generation_mode?: import('@/types').GenerationMode;
   }) {
     const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, {
       method: 'PUT',

@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .config import get_config
-from .models.project import BoundingBox, CardinalDirection, DetailLevel, OrientedRegion, OutputSettings, Project, get_recommended_detail_level, validate_aspect_ratio
+from .models.project import BoundingBox, CardinalDirection, DetailLevel, GenerationMode, OrientedRegion, OutputSettings, Project, get_recommended_detail_level, validate_aspect_ratio
 
 
 def timestamped_filename(base_name: str, extension: str = "png") -> str:
@@ -76,6 +76,10 @@ def main():
 @click.option("--atmosphere/--no-atmosphere", default=False, help="Enable atmospheric perspective")
 @click.option("--terrain-exaggeration", type=float, default=1.0, help="Terrain vertical exaggeration factor")
 @click.option("--auto-discover/--no-auto-discover", default=False, help="Auto-discover landmarks from OSM")
+@click.option("--generation-mode", "-g",
+              type=click.Choice(["flat", "hierarchical", "auto"]),
+              default="auto",
+              help="Generation strategy: flat (independent tiles), hierarchical (overview-first), auto (use project setting)")
 def generate(
     project_path: str,
     output: Optional[str],
@@ -89,6 +93,7 @@ def generate(
     atmosphere: bool,
     terrain_exaggeration: float,
     auto_discover: bool,
+    generation_mode: str,
 ):
     """Generate an illustrated map from a project configuration."""
     project_file = Path(project_path)
@@ -122,8 +127,15 @@ def generate(
     recommended_detail = project.region.get_recommended_detail_level()
     actual_detail = recommended_detail.value if detail_level == "auto" else detail_level
 
+    # Determine generation mode
+    if generation_mode == "auto":
+        effective_gen_mode = project.generation_mode
+    else:
+        effective_gen_mode = GenerationMode(generation_mode)
+
     console.print(f"[bold]Region area:[/bold] {area_km2:,.0f} km²")
     console.print(f"[bold]Detail level:[/bold] {actual_detail}")
+    console.print(f"[bold]Generation mode:[/bold] {effective_gen_mode.value}")
 
     with Progress(
         SpinnerColumn(),

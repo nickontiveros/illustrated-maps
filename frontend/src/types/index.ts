@@ -113,6 +113,8 @@ export interface ProjectSummary {
   last_modified: string | null;
 }
 
+export type GenerationMode = 'flat' | 'hierarchical';
+
 export interface ProjectDetail {
   name: string;
   region: BoundingBox;
@@ -127,6 +129,7 @@ export interface ProjectDetail {
   grid_rows: number;
   tile_count: number;
   estimated_cost: number | null;
+  generation_mode: GenerationMode;
   title: string | null;
   subtitle: string | null;
   border: BorderSettings | null;

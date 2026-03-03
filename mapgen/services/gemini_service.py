@@ -76,6 +76,58 @@ class GeminiService:
         ),
     }
 
+    # Hierarchical generation prompts
+    HIERARCHICAL_PROMPTS = {
+        "overview": (
+            "Create a hand-illustrated tourist map of this entire region. "
+            "Establish a unified artistic style with warm, muted colors. "
+            "Follow the geography shown in the reference image exactly — every "
+            "coastline, highway, river, large park, and urban area must match. "
+            "\n\n"
+            "Style guidelines:\n"
+            "- Hand-painted illustration aesthetic with a warm, cohesive color palette\n"
+            "- Roads: cream/beige paths clearly visible\n"
+            "- Buildings/urban areas: warm tan/terracotta clusters\n"
+            "- Water: soft blue-green tones\n"
+            "- Parks/vegetation: muted sage green\n"
+            "- Consistent line quality and texture throughout\n"
+            "\n"
+            "Show major features at this zoom level: coastlines, highways, rivers, "
+            "large parks, urban texture, major landmarks. "
+            "DO NOT include text labels, fantasy elements, or features not in the reference. "
+            "Create clean edges suitable for subdivision."
+        ),
+        "enhance_medium": (
+            "ILLUSTRATION REFERENCE — match this artistic style, color palette, "
+            "line quality, and composition exactly. This shows the SAME geographic "
+            "area at lower resolution:\n"
+        ),
+        "enhance_medium_instruction": (
+            "Enhance this map section with more geographic detail while preserving "
+            "the established style exactly. Add secondary roads, building clusters, "
+            "park interiors, and neighborhood texture. "
+            "The illustration reference and satellite image show the SAME area — "
+            "use the satellite for geographic accuracy and the illustration for style. "
+            "DO NOT change the color palette, line quality, or artistic approach. "
+            "DO NOT include text labels or features not visible in the satellite image."
+        ),
+        "enhance_fine": (
+            "ILLUSTRATION REFERENCE — match this artistic style, color palette, "
+            "line quality, and composition exactly. This shows the SAME geographic "
+            "area at lower resolution:\n"
+        ),
+        "enhance_fine_instruction": (
+            "Add fine detail to this map section while preserving the established "
+            "style exactly. Add individual buildings, small streets, landscape "
+            "features, and architectural detail. "
+            "The illustration reference and satellite image show the SAME area — "
+            "use the satellite for geographic accuracy and the illustration for style. "
+            "DO NOT change the color palette, line quality, or artistic approach. "
+            "DO NOT include text labels or features not visible in the satellite image. "
+            "Create clean edges suitable for seamless tiling."
+        ),
+    }
+
     # Terrain-specific prompt modifiers appended when terrain is detected
     TERRAIN_PROMPT_MODIFIERS = {
         "desert": (
@@ -314,6 +366,174 @@ class GeminiService:
         return GenerationResult(
             image=generated_image,
             prompt_used=prompt,
+            model=self.model,
+            generation_time=generation_time,
+        )
+
+    def generate_overview(
+        self,
+        reference_image: Image.Image,
+        style_prompt: Optional[str] = None,
+        terrain_description: Optional[str] = None,
+    ) -> GenerationResult:
+        """Generate a low-res overview illustration of the full region.
+
+        This establishes global style, color palette, and composition for
+        hierarchical generation. The overview is later subdivided to guide
+        higher-resolution enhancement passes.
+
+        Args:
+            reference_image: Full-region satellite + OSM composite.
+            style_prompt: Custom overview prompt (uses default if None).
+            terrain_description: Optional terrain description.
+
+        Returns:
+            GenerationResult with overview illustration.
+        """
+        from google.genai import types
+
+        prompt = style_prompt or self.HIERARCHICAL_PROMPTS["overview"]
+
+        instruction_parts = [prompt]
+        if terrain_description:
+            instruction_parts.append(f"\n\nTerrain characteristics: {terrain_description}")
+            modifier = self.detect_terrain_modifier(terrain_description)
+            if modifier:
+                instruction_parts.append(modifier)
+
+        instructions = "".join(instruction_parts)
+
+        max_size = self.MODELS.get(self.model, {}).get("max_size", 2048)
+        if reference_image.width > max_size or reference_image.height > max_size:
+            reference_image = reference_image.copy()
+            reference_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+        start_time = time.time()
+
+        contents = [reference_image, instructions]
+
+        logger.info(
+            "Gemini overview call: model=%s, image=%dx%d, prompt_len=%d",
+            self.model,
+            reference_image.width, reference_image.height,
+            len(instructions),
+        )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+
+        generation_time = time.time() - start_time
+        generated_image = self._extract_image_from_response(response)
+
+        logger.info(
+            "Gemini overview response: %dx%d in %.1fs",
+            generated_image.width, generated_image.height, generation_time,
+        )
+
+        return GenerationResult(
+            image=generated_image,
+            prompt_used=instructions,
+            model=self.model,
+            generation_time=generation_time,
+        )
+
+    def generate_enhanced_tile(
+        self,
+        illustration_crop: Image.Image,
+        reference_image: Image.Image,
+        level: str = "medium",
+        terrain_description: Optional[str] = None,
+        tile_position: Optional[str] = None,
+    ) -> GenerationResult:
+        """Generate an enhanced tile guided by a lower-res illustration crop.
+
+        Both images show the SAME geographic area — the illustration crop at
+        lower resolution (style guidance) and the reference at higher resolution
+        (geographic detail). This eliminates the geography-vs-style confusion
+        of the flat pipeline.
+
+        Args:
+            illustration_crop: Crop from previous level's illustration (style guide).
+            reference_image: High-res satellite + OSM composite (geography).
+            level: Enhancement level — "medium" (L1) or "fine" (L2).
+            terrain_description: Optional terrain description.
+            tile_position: Optional position info (e.g., "top-left corner").
+
+        Returns:
+            GenerationResult with enhanced tile.
+        """
+        from google.genai import types
+
+        if level == "fine":
+            label = self.HIERARCHICAL_PROMPTS["enhance_fine"]
+            instruction = self.HIERARCHICAL_PROMPTS["enhance_fine_instruction"]
+        else:
+            label = self.HIERARCHICAL_PROMPTS["enhance_medium"]
+            instruction = self.HIERARCHICAL_PROMPTS["enhance_medium_instruction"]
+
+        instruction_parts = [instruction]
+        if terrain_description:
+            instruction_parts.append(f"\n\nTerrain characteristics: {terrain_description}")
+            modifier = self.detect_terrain_modifier(terrain_description)
+            if modifier:
+                instruction_parts.append(modifier)
+        if tile_position:
+            instruction_parts.append(f"\n\nThis is the {tile_position} section of the map.")
+
+        full_instruction = "".join(instruction_parts)
+
+        max_size = self.MODELS.get(self.model, {}).get("max_size", 2048)
+        for img in [illustration_crop, reference_image]:
+            if img.width > max_size or img.height > max_size:
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+        start_time = time.time()
+
+        contents = [
+            label,
+            illustration_crop,
+            (
+                "GEOGRAPHY SOURCE — use this satellite/map image for roads, "
+                "buildings, parks, water, and all geographic detail:"
+            ),
+            reference_image,
+            full_instruction,
+        ]
+
+        text_parts = [c for c in contents if isinstance(c, str)]
+        image_parts = [c for c in contents if isinstance(c, Image.Image)]
+        logger.info(
+            "Gemini enhance call (%s): model=%s, images=%d [%s], prompt_len=%d",
+            level, self.model,
+            len(image_parts),
+            ", ".join(f"{img.size[0]}x{img.size[1]}" for img in image_parts),
+            sum(len(t) for t in text_parts),
+        )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+
+        generation_time = time.time() - start_time
+        generated_image = self._extract_image_from_response(response)
+
+        logger.info(
+            "Gemini enhance response (%s): %dx%d in %.1fs",
+            level, generated_image.width, generated_image.height, generation_time,
+        )
+
+        return GenerationResult(
+            image=generated_image,
+            prompt_used=full_instruction,
             model=self.model,
             generation_time=generation_time,
         )

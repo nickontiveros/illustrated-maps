@@ -7,6 +7,7 @@ import type {
   BorderSettings,
   NarrativeSettings,
   OrientedRegion,
+  GenerationMode,
 } from '@/types';
 import RegionDrawer from '@/components/RegionDrawer';
 
@@ -203,6 +204,9 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
   const [narrativeMaxLandmarks, setNarrativeMaxLandmarks] = useState(project.narrative?.max_landmarks ?? 50);
   const [narrativeMinScore, setNarrativeMinScore] = useState(project.narrative?.min_importance_score ?? 0.3);
 
+  // Generation mode
+  const [generationMode, setGenerationMode] = useState<GenerationMode>(project.generation_mode ?? 'hierarchical');
+
   // Region editing modal
   const [showRegionModal, setShowRegionModal] = useState(false);
   const [editingRegion, setEditingRegion] = useState<OrientedRegion | null>(null);
@@ -265,6 +269,7 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
     setNarrativeAutoDiscover(project.narrative?.auto_discover ?? false);
     setNarrativeMaxLandmarks(project.narrative?.max_landmarks ?? 50);
     setNarrativeMinScore(project.narrative?.min_importance_score ?? 0.3);
+    setGenerationMode(project.generation_mode ?? 'hierarchical');
   }, [project]);
 
   // Build the update payload from form state
@@ -344,6 +349,7 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
       subtitle: subtitle || undefined,
       border,
       narrative,
+      generation_mode: generationMode,
     };
   }, [
     project, title, subtitle, palettePreset, paletteStrength, colorConsistency,
@@ -352,6 +358,7 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
     borderEnabled, borderStyle, borderMargin, showCompass, showLegend,
     atmoEnabled, hazeStrength, contrastReduction,
     narrativeAutoDiscover, narrativeMaxLandmarks, narrativeMinScore,
+    generationMode,
   ]);
 
   // Dirty detection
@@ -387,6 +394,7 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
     if (narrativeAutoDiscover !== (t.narrative?.auto_discover ?? false)) return true;
     if (narrativeMaxLandmarks !== (t.narrative?.max_landmarks ?? 50)) return true;
     if (narrativeMinScore !== (t.narrative?.min_importance_score ?? 0.3)) return true;
+    if (generationMode !== (t.generation_mode ?? 'hierarchical')) return true;
     return false;
   })();
 
@@ -470,6 +478,51 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
         <Slider label="Palette Enforcement" value={paletteStrength} onChange={setPaletteStrength} min={0} max={1} step={0.05} />
         <Slider label="Color Consistency" value={colorConsistency} onChange={setColorConsistency} min={0} max={1} step={0.05} />
         <Slider label="Terrain Exaggeration" value={terrainExaggeration} onChange={setTerrainExaggeration} min={1} max={5} step={0.1} suffix="x" />
+      </Section>
+
+      {/* Generation Mode Section */}
+      <Section title="Generation" defaultOpen>
+        <div>
+          <label className="block text-sm text-slate-500 mb-2">Tile Generation Strategy</label>
+          <div className="space-y-2">
+            <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-slate-50 transition-colors"
+              style={{ borderColor: generationMode === 'hierarchical' ? '#3b82f6' : '#e2e8f0', backgroundColor: generationMode === 'hierarchical' ? '#eff6ff' : undefined }}>
+              <input
+                type="radio"
+                name="generation_mode"
+                value="hierarchical"
+                checked={generationMode === 'hierarchical'}
+                onChange={() => setGenerationMode('hierarchical')}
+                className="mt-0.5"
+              />
+              <div>
+                <div className="text-sm font-medium">Hierarchical (recommended)</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Generates an overview first, then enhances in 2 passes. Better color
+                  consistency and fewer seams. 31 Gemini calls.
+                </div>
+              </div>
+            </label>
+            <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-slate-50 transition-colors"
+              style={{ borderColor: generationMode === 'flat' ? '#3b82f6' : '#e2e8f0', backgroundColor: generationMode === 'flat' ? '#eff6ff' : undefined }}>
+              <input
+                type="radio"
+                name="generation_mode"
+                value="flat"
+                checked={generationMode === 'flat'}
+                onChange={() => setGenerationMode('flat')}
+                className="mt-0.5"
+              />
+              <div>
+                <div className="text-sm font-medium">Flat</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Generates all tiles independently with a central style reference.
+                  Original approach. {project.tile_count} Gemini calls.
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
       </Section>
 
       {/* Typography Section */}

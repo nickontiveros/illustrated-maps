@@ -44,6 +44,13 @@ class DetailLevel(str, Enum):
     COUNTRY = "country"  # Motorways, major cities only (> 50,000 km²)
 
 
+class GenerationMode(str, Enum):
+    """Tile generation strategy."""
+
+    FLAT = "flat"  # Independent tiles with style reference from central tile
+    HIERARCHICAL = "hierarchical"  # Overview-first: L0 overview → L1 medium → L2 fine
+
+
 # Area thresholds for automatic detail level selection (in km²)
 DETAIL_LEVEL_THRESHOLDS = {
     DetailLevel.FULL: 100,
@@ -521,6 +528,10 @@ class Project(BaseModel):
     oriented_region: Optional[OrientedRegion] = Field(
         default=None,
         description="Oriented region (center + dimensions + rotation). Preferred over region + orientation.",
+    )
+    generation_mode: GenerationMode = Field(
+        default=GenerationMode.HIERARCHICAL,
+        description="Generation strategy: flat (independent tiles) or hierarchical (overview-first)",
     )
 
     # Paths (set when loading from file)

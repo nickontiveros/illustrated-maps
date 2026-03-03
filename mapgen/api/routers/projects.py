@@ -218,6 +218,8 @@ async def create_project(request: ProjectCreate):
         project_kwargs["style"] = request.style
     if request.tiles is not None:
         project_kwargs["tiles"] = request.tiles
+    if request.generation_mode is not None:
+        project_kwargs["generation_mode"] = request.generation_mode
 
     project = Project(**project_kwargs)
     project.project_dir = project_dir
@@ -274,6 +276,8 @@ async def update_project(name: str, request: ProjectUpdate):
         project.border = request.border
     if request.narrative is not None:
         project.narrative = request.narrative
+    if request.generation_mode is not None:
+        project.generation_mode = request.generation_mode
 
     # Save updated project
     project.to_yaml(get_project_path(name))

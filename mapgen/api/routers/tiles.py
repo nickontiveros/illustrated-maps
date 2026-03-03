@@ -456,6 +456,8 @@ async def start_generation(
     # Capture API keys for background task closure
     from ...services.gemini_service import GeminiService
     from ...services.satellite_service import SatelliteService
+    from ...services.hierarchical_generation_service import HierarchicalGenerationService
+    from ...models.project import GenerationMode
 
     gemini_service = GeminiService(api_key=api_keys.google_api_key)
     satellite_service = SatelliteService(
@@ -463,49 +465,77 @@ async def start_generation(
         cache_dir=str(cache_dir / "satellite") if cache_dir else None,
     )
 
+    use_hierarchical = project.generation_mode == GenerationMode.HIERARCHICAL
+
+    if use_hierarchical:
+        # Hierarchical mode: 1 overview + 6 medium + 24 fine = 31 calls
+        total_tiles = 1 + 6 + 24
+
     async def run_generation():
         """Run the generation in background, then assemble tiles."""
-        service = GenerationService(
-            project=project,
-            cache_dir=cache_dir,
-            gemini_service=gemini_service,
-            satellite_service=satellite_service,
-        )
         loop = asyncio.get_running_loop()
 
-        # Progress callback runs in worker thread, so schedule update on main loop
-        def progress_callback(progress: GenerationProgress):
-            loop.call_soon_threadsafe(
-                asyncio.ensure_future,
-                task_manager.update_progress(task_info.task_id, progress),
+        if use_hierarchical:
+            service = HierarchicalGenerationService(
+                project=project,
+                cache_dir=cache_dir,
+                gemini_service=gemini_service,
+                satellite_service=satellite_service,
             )
 
-        results, final_progress = await asyncio.to_thread(
-            service.generate_all_tiles,
-            progress_callback=progress_callback,
-            style_reference=style_ref,
-        )
+            def progress_callback(progress):
+                loop.call_soon_threadsafe(
+                    asyncio.ensure_future,
+                    task_manager.update_progress(task_info.task_id, progress),
+                )
 
-        # Auto-assemble tiles into final image
-        gen_offsets = load_tile_offsets(name)
+            # generate_all_tiles handles assembly and saving internally
+            results, final_progress = await asyncio.to_thread(
+                service.generate_all_tiles,
+                progress_callback=progress_callback,
+            )
 
-        def assemble():
-            assembled = service.assemble_tiles(results, apply_perspective=False, tile_offsets=gen_offsets)
-            # Free tile images promptly
-            for r in results:
-                if r.generated_image is not None:
-                    r.generated_image.close()
-                    r.generated_image = None
-            if assembled is not None:
-                output_dir = project.project_dir / "output" if project.project_dir else Path("output")
-                output_dir.mkdir(parents=True, exist_ok=True)
-                output_path = output_dir / "assembled.png"
-                assembled.save(output_path)
-                assembled.close()
+            return results, final_progress
+        else:
+            service = GenerationService(
+                project=project,
+                cache_dir=cache_dir,
+                gemini_service=gemini_service,
+                satellite_service=satellite_service,
+            )
 
-        await asyncio.to_thread(assemble)
+            def progress_callback(progress: GenerationProgress):
+                loop.call_soon_threadsafe(
+                    asyncio.ensure_future,
+                    task_manager.update_progress(task_info.task_id, progress),
+                )
 
-        return results, final_progress
+            results, final_progress = await asyncio.to_thread(
+                service.generate_all_tiles,
+                progress_callback=progress_callback,
+                style_reference=style_ref,
+            )
+
+            # Auto-assemble tiles into final image
+            gen_offsets = load_tile_offsets(name)
+
+            def assemble():
+                assembled = service.assemble_tiles(results, apply_perspective=False, tile_offsets=gen_offsets)
+                # Free tile images promptly
+                for r in results:
+                    if r.generated_image is not None:
+                        r.generated_image.close()
+                        r.generated_image = None
+                if assembled is not None:
+                    output_dir = project.project_dir / "output" if project.project_dir else Path("output")
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    output_path = output_dir / "assembled.png"
+                    assembled.save(output_path)
+                    assembled.close()
+
+            await asyncio.to_thread(assemble)
+
+            return results, final_progress
 
     task_info = await task_manager.create_task(
         project_name=name,

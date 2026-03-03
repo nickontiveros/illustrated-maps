@@ -245,7 +245,11 @@ function GenerationModal({ progress, onClose, onCancel, isCancelling }: Generati
             <div className="text-sm text-indigo-600 mb-1">
               {progress.phase === 'fetching_osm' ? 'Loading Map Data' :
                progress.phase === 'fetching_satellite' ? 'Downloading Imagery' :
-               progress.phase === 'assembling' ? 'Assembling' : progress.phase}
+               progress.phase === 'assembling' ? 'Assembling' :
+               progress.phase === 'generating_overview' ? 'Generating Overview' :
+               progress.phase === 'generating_medium' ? 'Enhancing Medium Tiles' :
+               progress.phase === 'generating_fine' ? 'Enhancing Fine Tiles' :
+               progress.phase}
             </div>
             {progress.phase_detail && (
               <div className="font-medium text-indigo-800 text-sm">{progress.phase_detail}</div>
