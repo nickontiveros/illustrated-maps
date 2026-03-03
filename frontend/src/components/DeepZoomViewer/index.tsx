@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import OpenSeadragon from 'openseadragon';
+import { api } from '@/api/client';
 
 interface DeepZoomViewerProps {
   projectName: string;
@@ -26,6 +27,7 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAssembling, setIsAssembling] = useState(false);
   const [needsAssembly, setNeedsAssembly] = useState(false);
+  const [hasAssembledImage, setHasAssembledImage] = useState(false);
 
   // Fetch DZI info
   const fetchInfo = async () => {
@@ -40,6 +42,13 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
         if (response.status === 404) {
           setNeedsAssembly(true);
           setError(null);
+          // Check if an assembled.png already exists (e.g. from hierarchical generation)
+          try {
+            const ppStatus = await api.getPostProcessStatus(projectName);
+            setHasAssembledImage(ppStatus.assembled);
+          } catch {
+            setHasAssembledImage(false);
+          }
         } else {
           const data = await response.json().catch(() => null);
           const detail = data?.detail || response.statusText || `HTTP ${response.status}`;
@@ -161,6 +170,37 @@ function DeepZoomViewer({ projectName, className = '' }: DeepZoomViewerProps) {
   }
 
   if (needsAssembly) {
+    // If an assembled image exists (e.g. from hierarchical generation or quick test),
+    // show it directly instead of requiring DZI generation
+    if (hasAssembledImage) {
+      const assembledUrl = api.getPostProcessImageUrl(projectName, 'assembled');
+      return (
+        <div className={`relative ${className}`}>
+          <div className="w-full h-full overflow-auto bg-slate-800 flex items-center justify-center">
+            <img
+              src={assembledUrl}
+              alt="Assembled map"
+              className="max-w-full max-h-full object-contain"
+              draggable={false}
+            />
+          </div>
+          <div className="absolute top-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 text-sm shadow">
+            <div className="font-medium">Assembled Map</div>
+            <div className="text-slate-500 text-xs mb-2">Showing preview — generate DZI for full zoom</div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleAssemble}
+                disabled={isAssembling}
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isAssembling ? 'Re-assembling...' : 'Re-assemble'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className={`flex flex-col items-center justify-center bg-slate-100 ${className}`}>
         <div className="text-center">

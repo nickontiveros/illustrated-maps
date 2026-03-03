@@ -225,6 +225,16 @@ async def get_tile_generated(
     generated_dir, _ = get_tile_cache_dirs(name)
     tile_path = generated_dir / f"tile_{col}_{row}.png"
 
+    # Fall back to hierarchical cache if flat cache doesn't have the tile
+    if not tile_path.exists():
+        cache_dir = get_project_cache_dir(name)
+        hierarchical_dir = cache_dir / "hierarchical"
+        l1_col, l2_col = divmod(col, 2)
+        l1_row, l2_row = divmod(row, 2)
+        h_path = hierarchical_dir / f"L2_{l1_col}_{l1_row}_{l2_col}_{l2_row}.png"
+        if h_path.exists():
+            tile_path = h_path
+
     if not tile_path.exists():
         raise HTTPException(status_code=404, detail="Generated image not found")
 
@@ -643,9 +653,16 @@ async def assemble_tiles(name: str):
         # Load cached tiles into TileResult objects
         from PIL import Image
         generated_dir = cache_dir / "generated"
+        hierarchical_dir = cache_dir / "hierarchical"
         results = []
         for spec in specs:
             tile_path = generated_dir / f"tile_{spec.col}_{spec.row}.png"
+            # Fall back to hierarchical cache if flat cache doesn't have the tile
+            if not tile_path.exists() and hierarchical_dir.exists():
+                # Map global (col, row) back to hierarchical L2 naming
+                l1_col, l2_col = divmod(spec.col, 2)
+                l1_row, l2_row = divmod(spec.row, 2)
+                tile_path = hierarchical_dir / f"L2_{l1_col}_{l1_row}_{l2_col}_{l2_row}.png"
             if tile_path.exists():
                 img = Image.open(tile_path).convert("RGBA")
                 results.append(TileResult(spec=spec, generated_image=img))
