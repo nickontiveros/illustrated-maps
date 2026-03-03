@@ -971,6 +971,14 @@ class HierarchicalGenerationService:
             assembled.close()
             logger.info("Saved assembled image to %s", output_path)
 
+            # Invalidate stale DZI tiles so the viewer shows the new assembly
+            if self.cache_dir:
+                import shutil
+                dzi_dir = self.cache_dir / "dzi"
+                if dzi_dir.exists():
+                    shutil.rmtree(dzi_dir)
+                    logger.info("Cleared stale DZI cache at %s", dzi_dir)
+
         progress.phase_detail = "Complete"
         update_progress()
 

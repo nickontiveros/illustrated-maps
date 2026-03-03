@@ -543,6 +543,11 @@ async def start_generation(
                     output_path = output_dir / "assembled.png"
                     assembled.save(output_path)
                     assembled.close()
+                    # Invalidate stale DZI
+                    import shutil
+                    dzi_dir = cache_dir / "dzi"
+                    if dzi_dir.exists():
+                        shutil.rmtree(dzi_dir)
 
             await asyncio.to_thread(assemble)
 
@@ -692,6 +697,11 @@ async def assemble_tiles(name: str):
             output_path = output_dir / "assembled.png"
             assembled.save(output_path)
             assembled.close()
+            # Invalidate stale DZI
+            import shutil
+            dzi_dir = cache_dir / "dzi"
+            if dzi_dir.exists():
+                shutil.rmtree(dzi_dir)
             return output_path
         return None
 
