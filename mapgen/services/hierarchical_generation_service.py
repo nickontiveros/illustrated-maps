@@ -155,19 +155,32 @@ class HierarchicalGenerationService:
 
     # -- Reference image helpers --
 
+    def _ensure_osm_data(self) -> OSMData:
+        """Fetch and cache OSM data for the full region (single Overpass call)."""
+        if self._osm_data is None:
+            region = self.project.generation_bbox
+            logger.info("Fetching OSM data for full region (single call)...")
+            self._osm_data = self.osm.fetch_region_data(
+                region, detail_level=self._detail_level.value,
+            )
+        return self._osm_data
+
     def _fetch_reference(
         self,
         bbox: BoundingBox,
         output_size: tuple[int, int],
     ) -> Image.Image:
-        """Fetch satellite + OSM composite for a geographic area."""
+        """Fetch satellite + OSM composite for a geographic area.
+
+        OSM data is fetched once for the full region and reused for all tiles.
+        Satellite imagery is fetched per-tile (individual map tiles are cached).
+        """
         satellite_image = self.satellite.fetch_satellite_imagery(
             bbox=bbox,
             output_size=output_size,
         )
 
-        detail = get_recommended_detail_level(bbox.calculate_area_km2())
-        osm_data = self.osm.fetch_region_data(bbox, detail_level=detail.value)
+        osm_data = self._ensure_osm_data()
 
         perspective = PerspectiveService(
             angle=self.project.style.perspective_angle,
@@ -186,14 +199,17 @@ class HierarchicalGenerationService:
             apply_perspective=False,
         )
 
-    def _get_terrain_description(self, bbox: BoundingBox) -> Optional[str]:
-        """Fetch terrain description, returning None on failure."""
-        try:
-            elev_data = self.terrain.fetch_elevation_data(bbox)
-            return self.terrain.get_terrain_description(elev_data)
-        except Exception as e:
-            logger.debug("Terrain fetch skipped: %s", e)
-            return None
+    def _get_terrain_description(self, bbox: BoundingBox = None) -> Optional[str]:
+        """Get terrain description (fetched once for full region and cached)."""
+        if not hasattr(self, '_terrain_desc_cached'):
+            try:
+                region = self.project.generation_bbox
+                elev_data = self.terrain.fetch_elevation_data(region)
+                self._terrain_desc_cached = self.terrain.get_terrain_description(elev_data)
+            except Exception as e:
+                logger.debug("Terrain fetch skipped: %s", e)
+                self._terrain_desc_cached = None
+        return self._terrain_desc_cached
 
     # -- Grid geometry --
 
