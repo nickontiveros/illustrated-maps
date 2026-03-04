@@ -86,5 +86,6 @@ markers = [
     "network: tests that require network access",
     "gemini: tests that call the real Gemini API",
     "slow: tests that take more than 10 seconds",
+    "e2e: end-to-end tests with stubbed external services",
 ]
-addopts = "-m 'not network and not gemini and not slow'"
+addopts = "-m 'not network and not gemini and not slow and not e2e'"

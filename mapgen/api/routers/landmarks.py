@@ -251,14 +251,16 @@ async def illustrate_landmark(name: str, landmark_name: str, api_keys: APIKeys =
         raise HTTPException(status_code=400, detail="Landmark has no photo to illustrate")
 
     # Get style reference from generated tiles
-    generated_dir = cache_dir / "generation" / "generated"
+    # Check both flat cache and legacy path
     style_reference = None
-
-    if generated_dir.exists():
-        from PIL import Image
-        # Find a generated tile to use as style reference
-        for tile_path in generated_dir.glob("tile_*.png"):
-            style_reference = Image.open(tile_path)
+    for subdir in ["generated", "generation/generated"]:
+        generated_dir = cache_dir / subdir
+        if generated_dir.exists():
+            from PIL import Image
+            for tile_path in generated_dir.glob("tile_*.png"):
+                style_reference = Image.open(tile_path)
+                break
+        if style_reference is not None:
             break
 
     if style_reference is None:
@@ -349,14 +351,16 @@ async def illustrate_all_landmarks(name: str, api_keys: APIKeys = Depends(get_ap
     if not to_illustrate:
         return SuccessResponse(message="No landmarks need illustration")
 
-    # Get style reference
-    generated_dir = cache_dir / "generation" / "generated"
+    # Get style reference — check both flat cache and legacy path
     style_reference = None
-
-    if generated_dir.exists():
-        from PIL import Image
-        for tile_path in generated_dir.glob("tile_*.png"):
-            style_reference = Image.open(tile_path)
+    for subdir in ["generated", "generation/generated"]:
+        generated_dir = cache_dir / subdir
+        if generated_dir.exists():
+            from PIL import Image
+            for tile_path in generated_dir.glob("tile_*.png"):
+                style_reference = Image.open(tile_path)
+                break
+        if style_reference is not None:
             break
 
     if style_reference is None:

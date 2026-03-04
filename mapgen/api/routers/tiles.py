@@ -629,7 +629,7 @@ async def get_generation_status(name: str):
             completed_tiles=task.progress.completed_tiles,
             failed_tiles=task.progress.failed_tiles,
             current_tile=(task.progress.current_tile.col, task.progress.current_tile.row)
-            if task.progress.current_tile
+            if getattr(task.progress, "current_tile", None)
             else None,
             elapsed_seconds=task.progress.elapsed_time,
             estimated_remaining_seconds=task.progress.estimated_remaining,
