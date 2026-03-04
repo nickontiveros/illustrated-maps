@@ -467,6 +467,7 @@ async def start_generation(
     from ...services.gemini_service import GeminiService
     from ...services.satellite_service import SatelliteService
     from ...services.hierarchical_generation_service import HierarchicalGenerationService
+    from ...services.upscale_generation_service import UpscaleGenerationService
     from ...models.project import GenerationMode
 
     gemini_service = GeminiService(api_key=api_keys.google_api_key)
@@ -476,8 +477,11 @@ async def start_generation(
     )
 
     use_hierarchical = project.generation_mode == GenerationMode.HIERARCHICAL
+    use_upscale = project.generation_mode == GenerationMode.UPSCALE
 
-    if use_hierarchical:
+    if use_upscale:
+        total_tiles = 1  # Just 1 Gemini call
+    elif use_hierarchical:
         # Hierarchical mode: 1 overview + 6 medium + 24 fine = 31 calls
         total_tiles = 1 + 6 + 24
 
@@ -485,7 +489,27 @@ async def start_generation(
         """Run the generation in background, then assemble tiles."""
         loop = asyncio.get_running_loop()
 
-        if use_hierarchical:
+        if use_upscale:
+            service = UpscaleGenerationService(
+                project=project,
+                cache_dir=cache_dir,
+                gemini_service=gemini_service,
+                satellite_service=satellite_service,
+            )
+
+            def progress_callback(progress):
+                loop.call_soon_threadsafe(
+                    asyncio.ensure_future,
+                    task_manager.update_progress(task_info.task_id, progress),
+                )
+
+            results, final_progress = await asyncio.to_thread(
+                service.generate,
+                progress_callback=progress_callback,
+            )
+
+            return results, final_progress
+        elif use_hierarchical:
             service = HierarchicalGenerationService(
                 project=project,
                 cache_dir=cache_dir,

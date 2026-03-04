@@ -49,6 +49,7 @@ class GenerationMode(str, Enum):
 
     FLAT = "flat"  # Independent tiles with style reference from central tile
     HIERARCHICAL = "hierarchical"  # Overview-first: L0 overview → L1 medium → L2 fine
+    UPSCALE = "upscale"  # Single overview + Real-ESRGAN super-resolution
 
 
 # Area thresholds for automatic detail level selection (in km²)

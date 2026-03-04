@@ -174,11 +174,20 @@ class HierarchicalGenerationService:
 
         OSM data is fetched once for the full region and reused for all tiles.
         Satellite imagery is fetched per-tile (individual map tiles are cached).
+        At COUNTRY detail level, OSM is skipped (satellite already shows the
+        features that matter and the Overpass query is very slow).
         """
         satellite_image = self.satellite.fetch_satellite_imagery(
             bbox=bbox,
             output_size=output_size,
         )
+
+        # Skip OSM overlay for country-scale regions — the satellite already
+        # shows highways, rivers, coastlines, and city extents clearly, and
+        # the Overpass query for such large areas is extremely slow.
+        if self._detail_level == DetailLevel.COUNTRY:
+            logger.info("Skipping OSM overlay (COUNTRY detail level)")
+            return satellite_image.resize(output_size, Image.Resampling.LANCZOS).convert("RGBA")
 
         osm_data = self._ensure_osm_data()
 
@@ -557,6 +566,7 @@ class HierarchicalGenerationService:
         self,
         fine_tiles: list[dict],
         apply_color_grading: bool = True,
+        color_reference: Optional[Image.Image] = None,
     ) -> Optional[Image.Image]:
         """Assemble L2 fine tiles into the final output image.
 
@@ -566,6 +576,8 @@ class HierarchicalGenerationService:
         Args:
             fine_tiles: List of dicts from generate_fine_tiles().
             apply_color_grading: Whether to apply global color grading.
+            color_reference: Optional image to use as color grading reference
+                (e.g. the overview). Falls back to first successful tile.
 
         Returns:
             Final assembled image, or None if too many failures.
@@ -667,7 +679,7 @@ class HierarchicalGenerationService:
 
         # Apply global color grading
         if apply_color_grading and self._color_consistency is not None:
-            ref_tile = next(
+            ref_tile = color_reference if color_reference is not None else next(
                 (t['image'] for t in fine_tiles if t['image'] is not None),
                 None,
             )
@@ -887,6 +899,19 @@ class HierarchicalGenerationService:
                         'bbox': l1_grid[l1_row][l1_col],
                     })
 
+            # Color harmonization for L1 tiles against overview
+            if self._color_consistency is not None and overview is not None:
+                progress.phase = "color_harmonization"
+                progress.phase_detail = "Harmonizing tile colors..."
+                update_progress()
+                for l1_row in range(self.L1_ROWS):
+                    for l1_col in range(self.L1_COLS):
+                        if medium_tiles[l1_row][l1_col] is not None:
+                            medium_tiles[l1_row][l1_col] = self._color_consistency.histogram_match(
+                                medium_tiles[l1_row][l1_col], overview
+                            )
+                            self._save_cached(medium_tiles[l1_row][l1_col], 1, l1_col, l1_row)
+
             progress.phase = "assembling"
             progress.phase_detail = "Assembling from L1 tiles (quick-test)..."
             progress.phase_progress = None
@@ -971,13 +996,29 @@ class HierarchicalGenerationService:
                             progress.phase_detail = f"Fine tiles ({l2_count}/{l2_total})"
                             update_progress()
 
+            # -- Phase 3.5: Color harmonization --
+            if self._color_consistency is not None and overview is not None:
+                progress.phase = "color_harmonization"
+                progress.phase_detail = "Harmonizing tile colors..."
+                update_progress()
+                for tile_info in fine_tiles:
+                    if tile_info['image'] is not None:
+                        tile_info['image'] = self._color_consistency.histogram_match(
+                            tile_info['image'], overview
+                        )
+                        self._save_cached(
+                            tile_info['image'], 2,
+                            tile_info['l2_col'], tile_info['l2_row'],
+                            tile_info['l1_col'], tile_info['l1_row'],
+                        )
+
             # -- Phase 4: Assemble --
             progress.phase = "assembling"
             progress.phase_detail = "Assembling final image..."
             progress.phase_progress = None
             update_progress()
 
-            assembled = self.assemble(fine_tiles)
+            assembled = self.assemble(fine_tiles, color_reference=overview)
 
         if assembled is not None and self.project.project_dir:
             output_dir = self.project.project_dir / "output"

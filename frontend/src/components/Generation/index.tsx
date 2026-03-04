@@ -22,6 +22,7 @@ function Generation({ projectName }: GenerationProps) {
   const [showModal, setShowModal] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const isHierarchical = project?.generation_mode === 'hierarchical';
+  const isUpscale = project?.generation_mode === 'upscale';
 
   const activeGen = activeGenerations[projectName];
   const currentProgress: GenerationProgress | null =
@@ -118,7 +119,7 @@ function Generation({ projectName }: GenerationProps) {
                 ? 'Retry'
                 : 'Generate'}
             </button>
-            {isHierarchical && (
+            {isHierarchical && !isUpscale && (
               <button
                 onClick={() => handleStart(true)}
                 disabled={startGeneration.isPending}
@@ -265,6 +266,8 @@ function GenerationModal({ progress, onClose, onCancel, isCancelling }: Generati
                progress.phase === 'generating_overview' ? 'Generating Overview' :
                progress.phase === 'generating_medium' ? 'Enhancing Medium Tiles' :
                progress.phase === 'generating_fine' ? 'Enhancing Fine Tiles' :
+               progress.phase === 'color_harmonization' ? 'Harmonizing Colors' :
+               progress.phase === 'upscaling' ? 'Upscaling' :
                progress.phase}
             </div>
             {progress.phase_detail && (

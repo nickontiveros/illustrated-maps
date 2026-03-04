@@ -113,7 +113,7 @@ export interface ProjectSummary {
   last_modified: string | null;
 }
 
-export type GenerationMode = 'flat' | 'hierarchical';
+export type GenerationMode = 'flat' | 'hierarchical' | 'upscale';
 
 export interface ProjectDetail {
   name: string;

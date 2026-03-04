@@ -39,6 +39,14 @@ function GlobalProgressBar() {
               ? Math.round((progress.phase_progress[0] / progress.phase_progress[1]) * 100)
               : 0;
             indeterminate = !progress.phase_progress;
+          } else if (phase === 'color_harmonization') {
+            label = progress.phase_detail || 'Harmonizing colors...';
+            percent = 95;
+            indeterminate = true;
+          } else if (phase === 'upscaling') {
+            label = progress.phase_detail || 'Upscaling...';
+            percent = 80;
+            indeterminate = true;
           } else if (phase === 'assembling') {
             label = 'Assembling final image...';
             percent = 100;

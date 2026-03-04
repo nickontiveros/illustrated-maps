@@ -141,6 +141,26 @@ class GeminiService:
             "DO NOT include text labels or features not visible in the satellite image. "
             "Create clean edges suitable for seamless tiling."
         ),
+        "edit_medium": (
+            "Enhance this hand-illustrated tourist map by adding geographic detail "
+            "from the satellite image below. Keep the existing color palette, "
+            "brushwork, and artistic style exactly as they are. Add secondary roads, "
+            "building clusters, park interiors, and neighborhood texture.\n\n"
+            "CRITICAL: Do NOT change colors or artistic style. Only ADD detail "
+            "visible in the satellite image. Road widths and feature proportions "
+            "must match the satellite image.\n\n"
+            "DO NOT include text labels or features not visible in the satellite image."
+        ),
+        "edit_fine": (
+            "Refine this hand-illustrated tourist map by adding fine detail from "
+            "the satellite image below. Keep the existing color palette, brushwork, "
+            "and artistic style exactly as they are. Add individual buildings, small "
+            "streets, landscape features, and architectural detail.\n\n"
+            "CRITICAL: Do NOT change colors or artistic style. Only ADD finer "
+            "detail. Road widths and feature proportions must match the satellite.\n\n"
+            "DO NOT include text labels or features not visible in the satellite image. "
+            "Create clean edges suitable for seamless tiling."
+        ),
     }
 
     # Terrain-specific prompt modifiers appended when terrain is detected
@@ -484,16 +504,12 @@ class GeminiService:
         """
         from google.genai import types
 
-        if level == "fine":
-            label = self.HIERARCHICAL_PROMPTS["enhance_fine"]
-            instruction = self.HIERARCHICAL_PROMPTS["enhance_fine_instruction"]
-        else:
-            label = self.HIERARCHICAL_PROMPTS["enhance_medium"]
-            instruction = self.HIERARCHICAL_PROMPTS["enhance_medium_instruction"]
+        # Select edit-mode prompt (illustration is the primary image to modify)
+        edit_prompt = self.HIERARCHICAL_PROMPTS["edit_fine" if level == "fine" else "edit_medium"]
 
-        instruction_parts = [instruction]
+        instruction_parts = [edit_prompt]
         if terrain_description:
-            instruction_parts.append(f"\n\nTerrain characteristics: {terrain_description}")
+            instruction_parts.append(f"\n\nTerrain: {terrain_description}")
             modifier = self.detect_terrain_modifier(terrain_description)
             if modifier:
                 instruction_parts.append(modifier)
@@ -525,14 +541,10 @@ class GeminiService:
         start_time = time.time()
 
         contents = [
-            label,
-            illustration_crop,
-            (
-                "GEOGRAPHY SOURCE — use this satellite/map image for roads, "
-                "buildings, parks, water, and all geographic detail:"
-            ),
-            reference_image,
-            full_instruction,
+            illustration_crop,       # THE image to edit (first = primary)
+            full_instruction,        # "Enhance this illustration..."
+            "SATELLITE REFERENCE — use for road widths, building sizes, and feature positions:",
+            reference_image,         # satellite + OSM as guide
         ]
 
         text_parts = [c for c in contents if isinstance(c, str)]

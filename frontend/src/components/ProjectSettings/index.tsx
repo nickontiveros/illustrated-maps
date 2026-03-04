@@ -504,6 +504,24 @@ export default function ProjectSettings({ project }: ProjectSettingsProps) {
               </div>
             </label>
             <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-slate-50 transition-colors"
+              style={{ borderColor: generationMode === 'upscale' ? '#3b82f6' : '#e2e8f0', backgroundColor: generationMode === 'upscale' ? '#eff6ff' : undefined }}>
+              <input
+                type="radio"
+                name="generation_mode"
+                value="upscale"
+                checked={generationMode === 'upscale'}
+                onChange={() => setGenerationMode('upscale')}
+                className="mt-0.5"
+              />
+              <div>
+                <div className="text-sm font-medium">Upscale</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Single overview illustration + Real-ESRGAN super-resolution.
+                  Perfectly consistent (1 Gemini call), lower fine detail.
+                </div>
+              </div>
+            </label>
+            <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-slate-50 transition-colors"
               style={{ borderColor: generationMode === 'flat' ? '#3b82f6' : '#e2e8f0', backgroundColor: generationMode === 'flat' ? '#eff6ff' : undefined }}>
               <input
                 type="radio"
