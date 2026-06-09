@@ -108,12 +108,20 @@ function ProjectList() {
           <h1 className="text-3xl font-bold text-slate-800">MapGen</h1>
           <p className="text-slate-600 mt-1">Illustrated Map Generator</p>
         </div>
-        <button
-          onClick={() => { setCreateError(null); setShowCreateModal(true); }}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          New Project
-        </button>
+        <div className="flex items-center gap-3">
+          <Link
+            to="/v2"
+            className="px-4 py-2 text-sm text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+          >
+            V2 Maps →
+          </Link>
+          <button
+            onClick={() => { setCreateError(null); setShowCreateModal(true); }}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            New Project
+          </button>
+        </div>
       </div>
 
       {projects?.length === 0 ? (

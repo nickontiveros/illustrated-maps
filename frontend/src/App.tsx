@@ -1,6 +1,8 @@
 import { Routes, Route } from 'react-router-dom';
 import ProjectList from './components/ProjectList';
 import ProjectView from './components/ProjectView';
+import ProjectListV2 from './components/V2/ProjectListV2';
+import ProjectViewV2 from './components/V2/ProjectViewV2';
 import GlobalProgressBar from './components/GlobalProgressBar';
 import { useGlobalGeneration } from './hooks/useGlobalGeneration';
 
@@ -15,6 +17,8 @@ function App() {
         <Routes>
           <Route path="/" element={<ProjectList />} />
           <Route path="/project/:name" element={<ProjectView />} />
+          <Route path="/v2" element={<ProjectListV2 />} />
+          <Route path="/v2/:id" element={<ProjectViewV2 />} />
         </Routes>
       </div>
     </div>

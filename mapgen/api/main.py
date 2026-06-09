@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import get_config
-from .routers import dzi, landmarks, postprocess, projects, seams, tiles
+from .routers import dzi, landmarks, postprocess, projects, seams, tiles, v2
 from .tasks import task_manager
 from .websocket import router as websocket_router
 
@@ -53,6 +53,7 @@ app.include_router(landmarks.router, prefix="/api/projects", tags=["landmarks"])
 app.include_router(dzi.router, prefix="/api/projects", tags=["dzi"])
 app.include_router(postprocess.router, prefix="/api/projects", tags=["postprocess"])
 app.include_router(websocket_router, prefix="/api", tags=["websocket"])
+app.include_router(v2.router, prefix="/api/v2/projects", tags=["v2"])
 
 
 @app.get("/api/health")

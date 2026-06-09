@@ -209,6 +209,7 @@ class StyleSpec(BaseModel):
     )
     wobble_px: float = 1.6  # hand-drawn line jitter amplitude at full scale
     paper_grain: float = 0.05  # 0..1 strength of paper texture overlay
+    harmonize_strength: float = 0.5  # low-frequency AI mood blend (0 = off)
 
 
 class PlanDocument(BaseModel):

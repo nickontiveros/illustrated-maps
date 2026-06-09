@@ -325,7 +325,8 @@ class Compositor:
         halo = self.palette["paper"]
         for label in self.plan.labels:
             size = max(7, int(label.font_size_px * scale))
-            font = load_font(size, self.font_path)
+            bold = label.kind in (LabelKind.TITLE, LabelKind.DISTRICT, LabelKind.POI)
+            font = load_font(size, self.font_path, bold=bold)
             baseline = self._scaled(label.baseline, scale)
             if label.kind == LabelKind.TITLE:
                 self._draw_title(canvas, label.text, baseline[0], size, scale)
@@ -335,7 +336,7 @@ class Compositor:
 
     def _draw_title(self, canvas: Image.Image, text: str, center: Point, size: int, scale: float) -> None:
         cartouche = self._asset("ornament_cartouche")
-        font = load_font(size, self.font_path)
+        font = load_font(size, self.font_path, bold=True)
         if cartouche is not None:
             cw = int(size * max(6, len(text) * 0.75))
             ch = int(cw * cartouche.height / max(1, cartouche.width))

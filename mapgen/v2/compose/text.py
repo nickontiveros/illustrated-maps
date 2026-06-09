@@ -14,10 +14,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ..types import Point
 
-# Hand-lettering-ish fonts to try, in preference order, then sturdy
+# Bundled hand-lettering font (SIL OFL, see fonts/OFL.txt), then sturdy
 # fallbacks that exist on most systems.
+BUNDLED_FONT = Path(__file__).parent / "fonts" / "Caveat-Variable.ttf"
 FONT_CANDIDATES = [
-    "fonts/map_label.ttf",  # project-local override
+    str(BUNDLED_FONT),
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -26,14 +27,24 @@ FONT_CANDIDATES = [
 ]
 
 
-def load_font(size: int, font_path: str | None = None) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def load_font(
+    size: int,
+    font_path: str | None = None,
+    bold: bool = False,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = ([font_path] if font_path else []) + FONT_CANDIDATES
     for candidate in candidates:
         if candidate and Path(candidate).exists():
             try:
-                return ImageFont.truetype(candidate, size)
+                font = ImageFont.truetype(candidate, size)
             except OSError:
                 continue
+            if bold:
+                try:
+                    font.set_variation_by_axes([700])
+                except OSError:
+                    pass
+            return font
     try:
         return ImageFont.load_default(size=size)
     except TypeError:  # very old Pillow

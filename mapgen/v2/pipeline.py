@@ -22,9 +22,14 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field
 
+from typing import TYPE_CHECKING
+
 from .assets.manifest import slugify
 from .assets.studio import AssetGenerator, AssetStudio
 from .compose import Compositor
+
+if TYPE_CHECKING:
+    from .compose.harmonize import MoodPass
 from .ingest import SourceData, SourcePoi
 from .plan import PlanBuilder, plan_to_svg
 from .types import CameraSpec, CanvasSpec, PlanDocument, RegionBBox, StyleSpec
@@ -137,9 +142,14 @@ def compose_poster(
     project_dir: Path,
     scale: float = 1.0,
     out_path: Optional[Path] = None,
+    mood_pass: Optional["MoodPass"] = None,
 ) -> Path:
     compositor = Compositor(plan, project_dir / ASSETS_DIRNAME)
     image = compositor.render(scale=scale)
+    if mood_pass is not None and plan.style.harmonize_strength > 0:
+        from .compose.harmonize import harmonize
+
+        image = harmonize(image, mood_pass, plan.style, plan.style.harmonize_strength)
     out = out_path or (project_dir / POSTER_FILENAME)
     image.save(out, dpi=(plan.canvas.dpi, plan.canvas.dpi))
     logger.info("Poster written to %s (%dx%d)", out, image.width, image.height)

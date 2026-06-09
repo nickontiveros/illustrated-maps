@@ -93,16 +93,29 @@ def assets(project_dir: str, stub: bool, force: bool, only_ids: tuple[str, ...])
     click.echo(f"{len(paths)} assets ready in {directory / pipeline.ASSETS_DIRNAME}")
 
 
+def _make_mood_pass(harmonize: bool):
+    if not harmonize:
+        return None
+    from .compose.harmonize import GeminiMoodPass
+
+    return GeminiMoodPass()
+
+
 @v2.command()
 @click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--scale", default=1.0, show_default=True, help="Render scale (0.1 = quick preview).")
+@click.option("--harmonize", is_flag=True, help="Apply the low-frequency AI mood pass (one Gemini call).")
 @click.option("-o", "--output", type=click.Path(dir_okay=False), default=None)
-def compose(project_dir: str, scale: float, output: str | None) -> None:
+def compose(project_dir: str, scale: float, harmonize: bool, output: str | None) -> None:
     """Render the poster from plan.json + generated assets."""
     _, directory = _load_project(project_dir)
     document = _load_plan(directory)
     out = pipeline.compose_poster(
-        document, directory, scale=scale, out_path=Path(output) if output else None
+        document,
+        directory,
+        scale=scale,
+        out_path=Path(output) if output else None,
+        mood_pass=_make_mood_pass(harmonize),
     )
     click.echo(f"Poster: {out}")
 
@@ -110,8 +123,9 @@ def compose(project_dir: str, scale: float, output: str | None) -> None:
 @v2.command()
 @click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--stub", is_flag=True, help="Use the offline procedural generator (no API cost).")
+@click.option("--harmonize", is_flag=True, help="Apply the low-frequency AI mood pass (one Gemini call).")
 @click.option("--scale", default=1.0, show_default=True)
-def generate(project_dir: str, stub: bool, scale: float) -> None:
+def generate(project_dir: str, stub: bool, harmonize: bool, scale: float) -> None:
     """Full pipeline: plan -> assets -> compose."""
     project, directory = _load_project(project_dir)
     click.echo(f"[1/3] Planning {project.name}...")
@@ -121,5 +135,7 @@ def generate(project_dir: str, stub: bool, scale: float) -> None:
     click.echo("[2/3] Generating assets...")
     pipeline.generate_assets(document, directory, _make_generator(stub))
     click.echo("[3/3] Composing poster...")
-    out = pipeline.compose_poster(document, directory, scale=scale)
+    out = pipeline.compose_poster(
+        document, directory, scale=scale, mood_pass=_make_mood_pass(harmonize and not stub)
+    )
     click.echo(f"Done: {out}")
