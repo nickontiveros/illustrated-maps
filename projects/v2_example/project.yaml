@@ -1,0 +1,28 @@
+# V2 project: a region, a list of POIs, an output size. That's the product.
+#
+#   mapgen v2 plan projects/v2_example      # plan.json + preview.svg (free)
+#   mapgen v2 assets projects/v2_example    # AI assets (or --stub, no cost)
+#   mapgen v2 compose projects/v2_example   # render the poster
+name: "Lower Manhattan"
+region:
+  north: 40.7350
+  south: 40.6950
+  east: -73.9850
+  west: -74.0250
+output:
+  width_px: 7016
+  height_px: 9933
+  dpi: 300
+camera:
+  convergence: 0.78
+  vertical_scale: 0.55
+  horizon_margin: 0.06
+style: vintage_tourist
+distortion_strength: 0.5
+pois:
+  - { name: "Statue of Liberty", lat: 40.6892, lon: -74.0445, tier: 1 }
+  - { name: "Brooklyn Bridge", lat: 40.7061, lon: -73.9969, tier: 1 }
+  - { name: "One World Trade Center", lat: 40.7127, lon: -74.0134, tier: 1 }
+  - { name: "Wall Street", lat: 40.7066, lon: -74.0090, tier: 2 }
+  - { name: "City Hall", lat: 40.7128, lon: -74.0060, tier: 2 }
+  - { name: "South Street Seaport", lat: 40.7059, lon: -74.0030, tier: 3 }

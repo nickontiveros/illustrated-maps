@@ -57,6 +57,12 @@ def main():
     pass
 
 
+# V2 asset-composition pipeline (see V2_DESIGN.md).
+from .v2.cli import v2 as _v2_group  # noqa: E402
+
+main.add_command(_v2_group)
+
+
 @main.command()
 @click.argument("project_path", type=click.Path(exists=True))
 @click.option("--output", "-o", type=click.Path(), help="Output directory")
