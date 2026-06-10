@@ -56,12 +56,49 @@ def test_trim_to_content():
 def test_make_tileable_reduces_seam_error():
     rng = np.random.default_rng(0)
     # A gradient image: maximally non-tileable.
-    grad = np.linspace(0, 255, 128, dtype=np.uint8)
-    arr = np.tile(grad[None, :, None], (128, 1, 3)) + rng.integers(0, 10, (128, 128, 3), dtype=np.uint8)
+    grad = np.linspace(40, 215, 128)
+    arr = np.clip(
+        np.tile(grad[None, :, None], (128, 1, 3)) + rng.normal(0, 3, (128, 128, 3)), 0, 255
+    ).astype(np.uint8)
     img = Image.fromarray(arr, "RGB")
     before = edge_seam_error(img)
     after = edge_seam_error(make_tileable(img))
-    assert after < before * 0.25
+    assert after < before * 0.1
+
+
+def _blotchy_texture(size: int = 128, seed: int = 3) -> Image.Image:
+    """Smooth blotchy noise, shaped like a real painted-wash texture."""
+    from scipy.ndimage import gaussian_filter
+
+    rng = np.random.default_rng(seed)
+    noise = gaussian_filter(rng.normal(0.0, 1.0, (size, size)), sigma=8)
+    noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-9)
+    arr = (120 + 80 * noise).astype(np.uint8)
+    return Image.fromarray(np.dstack([arr, arr, arr]), "RGB")
+
+
+def test_tiled_mosaic_join_is_invisible():
+    """Tiling two copies side by side must not produce a visible seam."""
+    tileable = make_tileable(_blotchy_texture())
+    arr = np.asarray(tileable, dtype=np.float32)
+    w = arr.shape[1]
+    join_diff = np.abs(arr[:, -1] - arr[:, 0]).mean()  # column W-1 abuts column 0
+    typical_diff = np.abs(np.diff(arr, axis=1)).mean()
+    assert join_diff <= typical_diff * 3
+
+
+def test_make_tileable_leaves_no_edge_bands():
+    """The repair must not blur bands along the borders (the 'ghost grid').
+
+    Local contrast in the border zone should stay comparable to the
+    interior; a cross-fade repair fails this by averaging the edges.
+    """
+    tileable = make_tileable(_blotchy_texture())
+    grad = np.abs(np.diff(np.asarray(tileable, dtype=np.float32).mean(axis=2), axis=1))
+    w = grad.shape[1]
+    border = np.concatenate([grad[:, : w // 8], grad[:, -w // 8 :]], axis=1).mean()
+    interior = grad[:, 3 * w // 8 : 5 * w // 8].mean()
+    assert border > interior * 0.6
 
 
 def test_ensure_tileable_passthrough_for_good_textures():

@@ -132,14 +132,38 @@ class Compositor:
         canvas.alpha_composite(layer)
 
     def _tile_texture(self, texture: Image.Image, size: tuple[int, int], scale: float) -> Image.Image:
-        """Tile a texture across the canvas, scaled so its print density holds."""
+        """Fill the canvas with a texture without readable repetition.
+
+        Even a perfectly seamless tile repeats its features at the tile
+        period, which the eye picks up as a grid. Two countermeasures:
+        the texture is laid down at two incommensurate periods (golden
+        ratio apart) and blended, and a canvas-wide low-frequency tone
+        field modulates the result so no period survives intact.
+        """
         tile_size = max(64, int(texture.width * max(0.25, scale)))
+        base = self._tile_plain(texture, size, tile_size)
+        overlay = self._tile_plain(texture, size, max(64, int(tile_size * 1.618)))
+        out = Image.blend(base, overlay, 0.4)
+        return self._tone_variation(out)
+
+    def _tile_plain(self, texture: Image.Image, size: tuple[int, int], tile_size: int) -> Image.Image:
         tile = texture.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
         out = Image.new("RGB", size)
         for y in range(0, size[1], tile_size):
             for x in range(0, size[0], tile_size):
                 out.paste(tile, (x, y))
         return out
+
+    def _tone_variation(self, img: Image.Image, amount: float = 0.045) -> Image.Image:
+        """Seeded large-scale luminance variation, like uneven washes."""
+        rng = np.random.default_rng(11)
+        coarse = rng.uniform(0.0, 255.0, (9, 7)).astype(np.float32)
+        field = Image.fromarray(coarse.astype(np.uint8), "L").resize(
+            img.size, Image.Resampling.BICUBIC
+        )
+        factor = 1.0 + amount * (np.asarray(field, dtype=np.float32) / 127.5 - 1.0)
+        arr = np.asarray(img, dtype=np.float32) * factor[..., None]
+        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
 
     def _scaled(self, points: list[Point], scale: float) -> list[Point]:
         return [(x * scale, y * scale) for x, y in points]

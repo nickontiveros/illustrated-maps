@@ -2,7 +2,13 @@
 
 Generated textures are *requested* tileable, but the model is not
 reliable about it, so tileability is verified programmatically (opposite
-edge difference) and enforced with a cross-fade wrap when needed.
+edge difference) and enforced when needed.
+
+Repair uses Moisan's periodic+smooth decomposition (J. Math. Imaging
+Vis., 2011): the image is split into a periodic component and a smooth
+component that carries the cross-border discontinuity, and the smooth
+part is discarded. Unlike cross-fade methods, this removes the seam
+globally without leaving blurred bands along the tile borders.
 """
 
 from __future__ import annotations
@@ -19,29 +25,48 @@ def edge_seam_error(img: Image.Image) -> float:
     return float((horizontal + vertical) / 2.0)
 
 
-def make_tileable(img: Image.Image, blend_fraction: float = 0.18) -> Image.Image:
-    """Cross-fade wrap: blend the image with a half-period-rolled copy near
-    the edges so opposite edges become identical by construction."""
-    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
-    h, w, _ = arr.shape
-    rolled = np.roll(np.roll(arr, h // 2, axis=0), w // 2, axis=1)
+def periodic_component(arr: np.ndarray) -> np.ndarray:
+    """Periodic part of Moisan's periodic+smooth decomposition.
 
-    bw = max(2, int(w * blend_fraction))
-    bh = max(2, int(h * blend_fraction))
+    The returned array has (near-)identical opposite edges while interior
+    content is preserved; the discarded smooth component absorbs the
+    cross-border jump.
+    """
+    h, w = arr.shape[:2]
+    arr = arr.astype(np.float64)
+    boundary = np.zeros_like(arr)
+    row_jump = arr[-1, :] - arr[0, :]
+    boundary[0, :] += row_jump
+    boundary[-1, :] -= row_jump
+    col_jump = arr[:, -1] - arr[:, 0]
+    boundary[:, 0] += col_jump
+    boundary[:, -1] -= col_jump
 
-    # Weight ramps: 1 at the edges (use rolled copy, whose seam is at the
-    # center), 0 in the middle (use original).
-    x = np.arange(w, dtype=np.float32)
-    y = np.arange(h, dtype=np.float32)
-    wx = np.clip(1.0 - np.minimum(x, w - 1 - x) / bw, 0.0, 1.0)
-    wy = np.clip(1.0 - np.minimum(y, h - 1 - y) / bh, 0.0, 1.0)
-    weight = np.maximum(wx[None, :], wy[:, None])[..., None]
+    fx = 2.0 * np.cos(2.0 * np.pi * np.arange(w) / w)
+    fy = 2.0 * np.cos(2.0 * np.pi * np.arange(h) / h)
+    denom = fx[None, :] + fy[:, None] - 4.0
+    denom[0, 0] = 1.0  # avoid /0; the DC term is zeroed below
 
-    out = arr * (1.0 - weight) + rolled * weight
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+    smooth_hat = np.fft.fft2(boundary, axes=(0, 1)) / denom[:, :, None]
+    smooth_hat[0, 0, :] = 0.0
+    smooth = np.real(np.fft.ifft2(smooth_hat, axes=(0, 1)))
+    return arr - smooth
 
 
-def ensure_tileable(img: Image.Image, max_seam_error: float = 8.0) -> Image.Image:
+def make_tileable(img: Image.Image) -> Image.Image:
+    """Make opposite edges wrap seamlessly via periodic decomposition."""
+    arr = np.asarray(img.convert("RGB"), dtype=np.float64)
+    periodic = periodic_component(arr)
+    return Image.fromarray(np.clip(periodic, 0, 255).astype(np.uint8), "RGB")
+
+
+def ensure_tileable(img: Image.Image, max_seam_error: float = 0.5) -> Image.Image:
+    """Always repair unless the texture is already (near-)exactly periodic.
+
+    The decomposition is an exact identity for periodic input and cheap to
+    compute, so even faint seams (which read as a coherent grid once
+    tiled) are worth removing.
+    """
     if edge_seam_error(img) <= max_seam_error:
         return img.convert("RGB")
     return make_tileable(img)
