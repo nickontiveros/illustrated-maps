@@ -159,12 +159,18 @@ def _is_v2_project(directory: Path) -> bool:
 def _summary(project_id: str) -> dict:
     project, directory = _load_project(project_id)
     jobs.load_persisted(project_id)
+    plan_path = directory / pipeline.PLAN_FILENAME
+    has_plan = plan_path.exists()
+    # The plan bakes in the project config (POIs, region, camera); a config
+    # saved after the plan was built means the plan no longer reflects it.
+    plan_stale = has_plan and (directory / "project.yaml").stat().st_mtime > plan_path.stat().st_mtime
     return {
         "id": project_id,
         "name": project.name,
         "region": project.region.model_dump(),
         "poi_count": len(project.pois),
-        "has_plan": (directory / pipeline.PLAN_FILENAME).exists(),
+        "has_plan": has_plan,
+        "plan_stale": plan_stale,
         "has_poster": (directory / pipeline.POSTER_FILENAME).exists(),
         "status": {k: v.model_dump() for k, v in jobs.status(project_id).items()},
     }
@@ -207,6 +213,8 @@ def get_project(project_id: str) -> dict:
 @router.put("/{project_id}")
 def update_project(project_id: str, project: pipeline.V2Project) -> dict:
     _, directory = _load_project(project_id)
+    if jobs.is_running(project_id):
+        raise HTTPException(409, "A stage is running; try again when it finishes")
     project.save(directory / "project.yaml")
     return _summary(project_id)
 

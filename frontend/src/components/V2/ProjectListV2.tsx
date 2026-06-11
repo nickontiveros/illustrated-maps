@@ -57,8 +57,8 @@ function ProjectListV2() {
           </p>
         </div>
         <div className="flex gap-3">
-          <Link to="/" className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900">
-            &larr; V1 projects
+          <Link to="/v1" className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900">
+            V1 projects (legacy)
           </Link>
           <button
             onClick={() => setShowCreate(true)}
@@ -93,7 +93,11 @@ function ProjectListV2() {
               {p.region.south.toFixed(3)},{p.region.east.toFixed(3)}
             </p>
             <div className="flex gap-2 mt-3">
-              <StageChip label="Plan" done={p.has_plan} state={p.status?.plan?.state} />
+              <StageChip
+                label={p.plan_stale ? 'Plan (stale)' : 'Plan'}
+                done={p.has_plan && !p.plan_stale}
+                state={p.plan_stale ? 'stale' : p.status?.plan?.state}
+              />
               <StageChip
                 label="Assets"
                 done={p.status?.assets?.state === 'done'}
@@ -220,7 +224,7 @@ function ProjectListV2() {
 
 function StageChip({ label, done, state }: { label: string; done: boolean; state?: string }) {
   const color =
-    state === 'running'
+    state === 'running' || state === 'stale'
       ? 'bg-amber-100 text-amber-700'
       : state === 'error'
         ? 'bg-red-100 text-red-700'

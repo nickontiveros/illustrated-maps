@@ -160,3 +160,40 @@ def test_v1_projects_are_not_listed(client, tmp_path, project_payload):
     _create(client, project_payload)
     listed = client.get("/api/v2/projects").json()
     assert [p["id"] for p in listed] == ["test_town"]
+
+
+def test_poi_update_marks_plan_stale(client, project_payload, tmp_path):
+    """Editing POIs after planning must flag the plan as stale until re-planned."""
+    project_id = _create(client, project_payload)
+    client.post(f"/api/v2/projects/{project_id}/plan")
+    detail = client.get(f"/api/v2/projects/{project_id}").json()
+    assert detail["has_plan"] and not detail["plan_stale"]
+
+    # Updates touch project.yaml after plan.json -> stale. mtime can tie on
+    # coarse filesystems, so nudge the plan's mtime backwards first.
+    import os
+
+    plan_path = tmp_path / project_id / pipeline.PLAN_FILENAME
+    past = plan_path.stat().st_mtime - 10
+    os.utime(plan_path, (past, past))
+
+    config = detail["config"]
+    config["pois"].append({"name": "New Pier", "lat": 40.73, "lon": -73.99, "tier": 3})
+    updated = client.put(f"/api/v2/projects/{project_id}", json=config).json()
+    assert updated["poi_count"] == 3
+    assert updated["plan_stale"]
+
+    # Re-planning clears the flag and picks up the new POI.
+    client.post(f"/api/v2/projects/{project_id}/plan")
+    detail = client.get(f"/api/v2/projects/{project_id}").json()
+    assert not detail["plan_stale"]
+    plan = client.get(f"/api/v2/projects/{project_id}/plan").json()
+    assert any(slot["name"] == "New Pier" for slot in plan["pois"])
+
+
+def test_update_rejected_while_stage_runs(client, project_payload):
+    project_id = _create(client, project_payload)
+    detail = client.get(f"/api/v2/projects/{project_id}").json()
+    v2_router.jobs.update(project_id, "plan", state="running")
+    response = client.put(f"/api/v2/projects/{project_id}", json=detail["config"])
+    assert response.status_code == 409

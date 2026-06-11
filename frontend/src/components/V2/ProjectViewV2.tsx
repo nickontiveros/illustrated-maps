@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { v2api, type V2JobState } from '@/api/v2';
+import { v2api, type V2JobState, type V2Poi, type V2ProjectDetail } from '@/api/v2';
 
 /** V2 workflow: Plan (free) -> Assets (AI, cached) -> Compose (deterministic). */
 function ProjectViewV2() {
@@ -76,6 +76,11 @@ function ProjectViewV2() {
         <StageCard
           title="1 · Plan"
           subtitle="Geometry, perspective, placement — free"
+          note={
+            project.plan_stale
+              ? 'Project changed since this plan was built — re-plan to apply.'
+              : undefined
+          }
           job={status?.plan}
           action={
             <button
@@ -146,6 +151,8 @@ function ProjectViewV2() {
           }
         />
       </div>
+
+      <PoiEditor project={project} disabled={!!anyRunning} onSaved={refresh} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Plan preview */}
@@ -225,14 +232,156 @@ function ProjectViewV2() {
   );
 }
 
+/** Edit the project's POIs after creation; saving marks the plan stale. */
+function PoiEditor({
+  project,
+  disabled,
+  onSaved,
+}: {
+  project: V2ProjectDetail;
+  disabled: boolean;
+  onSaved: () => void;
+}) {
+  // null = not editing; the saved config is the source of truth until then.
+  const [draft, setDraft] = useState<V2Poi[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pois = draft ?? project.config.pois;
+  const region = project.config.region;
+
+  const save = useMutation({
+    mutationFn: (next: V2Poi[]) =>
+      v2api.updateProject(project.id, { ...project.config, pois: next }),
+    onSuccess: () => {
+      setDraft(null);
+      setError(null);
+      onSaved();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const edit = (i: number, patch: Partial<V2Poi>) =>
+    setDraft(pois.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const add = () =>
+    setDraft([
+      ...pois,
+      { name: '', lat: (region.north + region.south) / 2, lon: (region.east + region.west) / 2, tier: 2 },
+    ]);
+  const remove = (i: number) => setDraft(pois.filter((_, j) => j !== i));
+
+  const valid = pois.every(
+    (p) =>
+      p.name.trim() &&
+      Number.isFinite(p.lat) &&
+      Number.isFinite(p.lon) &&
+      p.lat <= region.north &&
+      p.lat >= region.south &&
+      p.lon <= region.east &&
+      p.lon >= region.west
+  );
+
+  return (
+    <section className="bg-white rounded-xl border border-slate-200 p-4 mb-8">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="font-semibold text-slate-700">Points of interest</h2>
+        <button onClick={add} disabled={disabled} className="text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-40">
+          + Add POI
+        </button>
+      </div>
+      <p className="text-xs text-slate-500 mb-3">
+        Each POI becomes an illustrated, labeled landmark. After saving, re-run Plan (and
+        generate any new assets) to apply.
+      </p>
+      <div className="space-y-2 mb-3">
+        {pois.map((poi, i) => (
+          <div key={i} className="grid grid-cols-[1fr_110px_110px_80px_24px] gap-2 items-center">
+            <input
+              value={poi.name}
+              onChange={(e) => edit(i, { name: e.target.value })}
+              placeholder="Name"
+              disabled={disabled}
+              className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+            />
+            <input
+              type="number"
+              step="0.0001"
+              value={poi.lat}
+              onChange={(e) => edit(i, { lat: parseFloat(e.target.value) })}
+              title={`Latitude (${region.south} – ${region.north})`}
+              disabled={disabled}
+              className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+            />
+            <input
+              type="number"
+              step="0.0001"
+              value={poi.lon}
+              onChange={(e) => edit(i, { lon: parseFloat(e.target.value) })}
+              title={`Longitude (${region.west} – ${region.east})`}
+              disabled={disabled}
+              className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+            />
+            <select
+              value={poi.tier}
+              onChange={(e) => edit(i, { tier: parseInt(e.target.value) })}
+              title="Importance tier"
+              disabled={disabled}
+              className="border border-slate-300 rounded-lg px-1 py-1.5 text-sm"
+            >
+              <option value={1}>Hero</option>
+              <option value={2}>Major</option>
+              <option value={3}>Minor</option>
+            </select>
+            <button
+              onClick={() => remove(i)}
+              disabled={disabled}
+              className="text-slate-400 hover:text-red-600 text-sm disabled:opacity-40"
+              title="Remove"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {pois.length === 0 && <p className="text-sm text-slate-400">No POIs — add at least one.</p>}
+      </div>
+      {!valid && draft && (
+        <p className="text-xs text-amber-600 mb-2">
+          Every POI needs a name and coordinates inside the region.
+        </p>
+      )}
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {draft && (
+        <div className="flex gap-3">
+          <button
+            onClick={() => save.mutate(pois.filter((p) => p.name.trim()))}
+            disabled={disabled || !valid || save.isPending}
+            className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {save.isPending ? 'Saving…' : 'Save POIs'}
+          </button>
+          <button
+            onClick={() => {
+              setDraft(null);
+              setError(null);
+            }}
+            className="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900"
+          >
+            Discard changes
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function StageCard({
   title,
   subtitle,
+  note,
   job,
   action,
 }: {
   title: string;
   subtitle: string;
+  note?: string;
   job?: V2JobState;
   action: React.ReactNode;
 }) {
@@ -252,6 +401,7 @@ function StageCard({
         <span className={`text-xs px-2 py-0.5 rounded-full ${badge}`}>{state}</span>
       </div>
       <p className="text-xs text-slate-500 mb-3">{subtitle}</p>
+      {note && <p className="text-xs text-amber-600 mb-3">{note}</p>}
       {state === 'running' && job && job.total > 0 && (
         <div className="mb-3">
           <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">

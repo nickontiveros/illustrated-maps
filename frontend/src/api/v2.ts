@@ -44,6 +44,7 @@ export interface V2ProjectSummary {
   region: V2Region;
   poi_count: number;
   has_plan: boolean;
+  plan_stale: boolean;
   has_poster: boolean;
   status: V2Status;
 }
