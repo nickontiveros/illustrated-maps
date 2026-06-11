@@ -23,8 +23,11 @@ CAMERA_CLAUSE = (
     "front facade and roof both visible, sunlight from the northwest"
 )
 KEY_CLAUSE = (
-    "isolated on a perfectly flat, pure magenta background (#FF00FF), "
-    "no shadows cast onto the background, no text anywhere"
+    "isolated on a single flat solid magenta background: every pixel not covered "
+    "by the subject must be pure magenta #FF00FF, edge to edge, with no other "
+    "background of any kind (no parchment, no paper, no sky, no scene, no frame, "
+    "no border), no shadows cast onto the background, no text anywhere; "
+    "never use magenta, fuchsia, or hot pink in the subject itself"
 )
 
 
@@ -39,9 +42,14 @@ def build_prompt(spec: AssetSpec, style: StyleSpec) -> str:
         )
     if spec.kind == AssetKind.TEXTURE:
         return (
-            f"Seamless tileable texture, {style_clause}: {spec.prompt_hints or spec.subject}. "
-            "Perfectly tileable: the left/right and top/bottom edges must wrap seamlessly. "
-            "Even tone, no vignetting, no border, no text."
+            f"A flat painted surface swatch used to fill areas of an illustrated map: "
+            f"{spec.prompt_hints or spec.subject}. Palette and brushwork of {style_clause}. "
+            "This is an extreme close-up of one uniform painted wash -- only subtle "
+            "brushstrokes and gentle tone variation across a single material. "
+            "It is NOT a map and NOT a scene: absolutely no objects, no buildings, "
+            "no roads, no rivers, no coastlines, no trees, no fields, no map features "
+            "of any kind. Perfectly tileable: the left/right and top/bottom edges must "
+            "wrap seamlessly. Even tone, no vignetting, no border, no text."
         )
     if spec.kind == AssetKind.SPRITE_SHEET:
         cols, rows = spec.sheet_grid or (3, 2)
@@ -49,6 +57,8 @@ def build_prompt(spec: AssetSpec, style: StyleSpec) -> str:
             f"A sprite sheet of exactly {cols * rows} variations arranged in a strict "
             f"{cols}x{rows} grid, each cell containing one {spec.prompt_hints or spec.subject}, "
             f"{style_clause}, {CAMERA_CLAUSE}, each sprite {KEY_CLAUSE}. "
+            "The background of the entire sheet, including every grid cell and the "
+            "gaps between cells, must be pure magenta #FF00FF. "
             "Keep every sprite fully inside its grid cell with margin."
         )
     if spec.kind == AssetKind.POI_SPRITE:
@@ -61,12 +71,22 @@ def build_prompt(spec: AssetSpec, style: StyleSpec) -> str:
         return (
             f"An illustrated landmark for a tourist map: {spec.subject}. {photo_clause}"
             f"{style_clause}, {CAMERA_CLAUSE}, slightly exaggerated charming proportions, "
-            f"simplified but recognizable architectural details, {KEY_CLAUSE}."
+            f"simplified but recognizable architectural details. Draw exactly ONE "
+            f"isolated structure with nothing around it: no streets, no water, no sky, "
+            f"no ground plane, no neighboring buildings, no base or platform under it. "
+            f"If the subject is a street, district, or area rather than a single "
+            f"building, draw only its single most iconic building instead -- never "
+            f"a scene, never a city block, never signage. The structure must be "
+            f"{KEY_CLAUSE}."
         )
     # Ornament
     return (
-        f"A decorative map ornament: {spec.subject}, {style_clause}, "
-        f"flat-on view, {KEY_CLAUSE}."
+        f"A decorative map ornament: {spec.subject}, {style_clause}, flat-on view. "
+        "Draw ONLY the ornament itself: it is a small decorative element, not a map, "
+        "not a scene, not a landscape, not a framed picture. If the ornament is a "
+        "frame or cartouche, draw just the ornamental border with a completely empty "
+        "center -- the background must show through the entire middle. "
+        f"The ornament must be {KEY_CLAUSE}."
     )
 
 

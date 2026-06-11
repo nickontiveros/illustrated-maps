@@ -45,6 +45,13 @@ class AssetStudio:
     def _meta_path(self, spec: AssetSpec) -> Path:
         return self.cache_dir / f"{spec.id}.json"
 
+    def _save_raw(self, spec: AssetSpec, raw: Image.Image) -> None:
+        """Keep the unprocessed generation so matting/post-process changes
+        can be re-applied later without spending another API call."""
+        raw_dir = self.cache_dir / "raw"
+        raw_dir.mkdir(exist_ok=True)
+        raw.save(raw_dir / f"{spec.id}.png")
+
     def is_cached(self, spec: AssetSpec) -> bool:
         meta = self._meta_path(spec)
         if not meta.exists() or not self.asset_path(spec).exists():
@@ -84,6 +91,7 @@ class AssetStudio:
 
             logger.info("Generating asset %s (%s)", spec.id, spec.kind.value)
             raw = self.generator.generate(spec, plan.style, style_reference)
+            self._save_raw(spec, raw)
             processed = self._post_process(spec, raw)
             path = self.asset_path(spec)
             processed.save(path)
@@ -103,10 +111,22 @@ class AssetStudio:
         if spec.kind == AssetKind.TEXTURE:
             return ensure_tileable(img)
         if spec.kind in (AssetKind.SPRITE_SHEET, AssetKind.POI_SPRITE, AssetKind.ORNAMENT):
-            if img.mode == "RGBA":
+            # Key out the flat magenta background. Gemini returns opaque RGBA
+            # PNGs (alpha channel present but all 255), so mode == "RGBA" does
+            # NOT mean the background is already transparent -- only skip keying
+            # when the image carries real (varying) transparency.
+            if img.mode == "RGBA" and _has_real_transparency(img):
                 return img
             return key_to_alpha(img)
         return img.convert("RGB")
+
+
+def _has_real_transparency(img: Image.Image) -> bool:
+    """True if the alpha channel actually varies (genuine cut-out), not a
+    uniformly-opaque channel that merely happens to be present."""
+    alpha = img.getchannel("A")
+    lo, hi = alpha.getextrema()
+    return lo < 250
 
 
 def load_sprites_from_sheet(sheet_path: Path, grid: tuple[int, int]) -> list[Image.Image]:

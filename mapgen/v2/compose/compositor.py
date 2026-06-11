@@ -365,7 +365,14 @@ class Compositor:
             cw = int(size * max(6, len(text) * 0.75))
             ch = int(cw * cartouche.height / max(1, cartouche.width))
             cartouche = cartouche.convert("RGBA").resize((cw, ch), Image.Resampling.LANCZOS)
-            canvas.alpha_composite(cartouche, (int(center[0] - cw / 2), int(center[1] - ch / 2)))
+            # Clamp fully on-canvas (the title anchor can sit near the top
+            # edge, which would clip the ornament), then center the
+            # lettering in the frame wherever it actually landed.
+            margin = max(8, int(canvas.width * 0.015))
+            x0 = min(max(margin, int(center[0] - cw / 2)), max(margin, canvas.width - cw - margin))
+            y0 = min(max(margin, int(center[1] - ch / 2)), max(margin, canvas.height - ch - margin))
+            canvas.alpha_composite(cartouche, (x0, y0))
+            center = (x0 + cw / 2, y0 + ch / 2)
         draw_text_on_path(canvas, text, [center], font, self.palette["label"], halo=self.palette["paper"])
 
     def _draw_frame(self, canvas: Image.Image, scale: float) -> None:

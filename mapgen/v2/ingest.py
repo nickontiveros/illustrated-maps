@@ -90,6 +90,20 @@ def geo_to_normalized(coord: LonLat, region: RegionBBox) -> Point:
     )
 
 
+def _clean_name(value) -> Optional[str]:
+    """Coerce a GeoDataFrame cell to a clean str or None.
+
+    Unnamed OSM features come back as pandas NaN (a float), and ``nan or None``
+    evaluates to ``nan`` because NaN is truthy -- so guard explicitly.
+    """
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if value is None or not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
 def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cover - needs geopandas
     """Convert V1 OSMData (GeoDataFrames) into plain SourceData."""
     from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
@@ -116,11 +130,9 @@ def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cov
             if isinstance(highway, list):
                 highway = highway[0] if highway else None
             cls = _HIGHWAY_TO_CLASS.get(str(highway), RoadClass.LOCAL)
-            name = row.get("name")
-            if isinstance(name, list):
-                name = name[0] if name else None
+            name = _clean_name(row.get("name"))
             for coords in _lines(row.geometry):
-                source.roads.append(SourceRoad(cls=cls, coords=coords, name=name or None))
+                source.roads.append(SourceRoad(cls=cls, coords=coords, name=name))
 
     for attr, ground_cls in (("water", GroundClass.WATER), ("parks", GroundClass.PARK)):
         gdf = getattr(osm_data, attr, None)
@@ -133,7 +145,7 @@ def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cov
                         cls=ground_cls,
                         exterior=list(poly.exterior.coords),
                         holes=[list(ring.coords) for ring in poly.interiors],
-                        name=row.get("name") or None,
+                        name=_clean_name(row.get("name")),
                     )
                 )
 
