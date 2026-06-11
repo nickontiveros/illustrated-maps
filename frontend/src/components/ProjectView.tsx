@@ -59,7 +59,7 @@ function ProjectView() {
       {/* Header */}
       <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to="/" className="text-slate-400 hover:text-slate-600">
+          <Link to="/v1" className="text-slate-400 hover:text-slate-600">
             ← Back
           </Link>
           <h1 className="text-xl font-semibold text-slate-800">{project.name}</h1>

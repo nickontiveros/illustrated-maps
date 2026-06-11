@@ -15,10 +15,13 @@ function App() {
       <GlobalProgressBar />
       <div className="flex-1">
         <Routes>
-          <Route path="/" element={<ProjectList />} />
-          <Route path="/project/:name" element={<ProjectView />} />
+          {/* V2 asset-composition pipeline is the default experience */}
+          <Route path="/" element={<ProjectListV2 />} />
           <Route path="/v2" element={<ProjectListV2 />} />
           <Route path="/v2/:id" element={<ProjectViewV2 />} />
+          {/* V1 tile-generation pipeline (legacy) */}
+          <Route path="/v1" element={<ProjectList />} />
+          <Route path="/project/:name" element={<ProjectView />} />
         </Routes>
       </div>
     </div>

@@ -125,8 +125,11 @@ class TestGenerateBaseTile:
 
         call_args = mock_client.models.generate_content.call_args
         contents = call_args.kwargs.get("contents") or call_args[1].get("contents")
-        # Should have ref image, style image, and prompt
-        assert len(contents) == 3
+        # Both images (geography reference + style reference) must be sent,
+        # interleaved with their descriptive text parts and the prompt.
+        images = [c for c in contents if not isinstance(c, str)]
+        assert len(images) == 2
+        assert any("STYLE" in c for c in contents if isinstance(c, str))
 
     def test_resizes_large_input(self, gemini_service, mock_genai_types):
         mock_client = MagicMock()

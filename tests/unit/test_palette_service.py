@@ -45,13 +45,18 @@ class TestFromPreset:
 # ---------------------------------------------------------------------------
 
 class TestPresets:
-    def test_has_three_presets(self):
+    def test_has_four_presets(self):
         from mapgen.services.palette_service import PRESETS
-        assert len(PRESETS) == 3
+        assert len(PRESETS) == 4
 
     def test_preset_keys(self):
         from mapgen.services.palette_service import PRESETS
-        assert set(PRESETS.keys()) == {"vintage_tourist", "modern_pop", "ink_wash"}
+        assert set(PRESETS.keys()) == {
+            "vintage_tourist",
+            "modern_pop",
+            "ink_wash",
+            "sonoran_desert",
+        }
 
     def test_presets_are_lists_of_hex(self):
         from mapgen.services.palette_service import PRESETS
