@@ -116,6 +116,76 @@ def assign_feature_ids(source: "SourceData") -> None:
             p.id = unique(f"place:{_geom_hash(p.name, [(p.longitude, p.latitude)])}")
 
 
+SOURCE_FILENAME = "source.json"
+
+
+def save_source(source: "SourceData", path) -> None:
+    """Persist SourceData as JSON so the editor / preview-plan can re-plan
+    without re-fetching OSM. Enums are stored as their string values."""
+    import json
+    from dataclasses import asdict
+    from pathlib import Path
+
+    def enc(o):
+        if isinstance(o, (RoadClass, GroundClass)):
+            return o.value
+        raise TypeError(f"not serializable: {type(o)}")
+
+    data = {
+        "region": source.region.model_dump(),
+        "roads": [asdict(r) for r in source.roads],
+        "ground": [asdict(g) for g in source.ground],
+        "pois": [asdict(p) for p in source.pois],
+        "places": [asdict(p) for p in source.places],
+        "buildings": source.buildings,
+        "provenance": source.provenance,
+    }
+    Path(path).write_text(json.dumps(data, default=enc))
+
+
+def load_source(path) -> "SourceData":
+    import json
+    from pathlib import Path
+
+    d = json.loads(Path(path).read_text())
+
+    def pts(seq):
+        return [(float(x), float(y)) for x, y in seq]
+
+    roads = [
+        SourceRoad(cls=RoadClass(r["cls"]), coords=pts(r["coords"]), name=r["name"], ref=r["ref"], id=r["id"])
+        for r in d["roads"]
+    ]
+    ground = [
+        SourcePolygon(
+            cls=GroundClass(g["cls"]),
+            exterior=pts(g["exterior"]),
+            holes=[pts(h) for h in g["holes"]],
+            name=g["name"],
+            id=g["id"],
+        )
+        for g in d["ground"]
+    ]
+    pois = [
+        SourcePoi(
+            id=p["id"], name=p["name"], latitude=p["latitude"], longitude=p["longitude"],
+            tier=p["tier"], photo=p["photo"], feature_type=p["feature_type"],
+            path=[(float(a), float(b)) for a, b in p["path"]] if p.get("path") else None,
+        )
+        for p in d["pois"]
+    ]
+    places = [SourcePlace(**p) for p in d["places"]]
+    return SourceData(
+        region=RegionBBox(**d["region"]),
+        roads=roads,
+        ground=ground,
+        pois=pois,
+        places=places,
+        buildings=[pts(b) for b in d.get("buildings", [])],
+        provenance=d.get("provenance", {}),
+    )
+
+
 _HIGHWAY_TO_CLASS = {
     "motorway": RoadClass.MOTORWAY,
     "trunk": RoadClass.MOTORWAY,

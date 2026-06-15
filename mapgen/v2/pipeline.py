@@ -172,6 +172,46 @@ def make_frame(project: V2Project) -> "GeoFrame":
     return GeoFrame(project.region, rotation_deg=float(rotation), target_aspect=target_aspect)
 
 
+def source_to_normalized(source: SourceData, frame: "GeoFrame") -> dict:
+    """Project the source features into normalized frame space (0..1) for the
+    layout editor: warp-independent coordinates with stable ids, so the user
+    can pick features and draw warp regions over the true geography."""
+
+    def nm(coord):
+        u, v = frame.to_normalized((coord[0], coord[1]))
+        return [round(u, 5), round(v, 5)]
+
+    roads = [
+        {
+            "id": r.id,
+            "cls": r.cls.value,
+            "name": r.name,
+            "ref": r.ref,
+            "points": [nm(c) for c in r.coords],
+        }
+        for r in source.roads
+    ]
+    ground = [
+        {"id": g.id, "cls": g.cls.value, "name": g.name, "exterior": [nm(c) for c in g.exterior]}
+        for g in source.ground
+    ]
+    pois = [
+        {
+            "id": p.id,
+            "name": p.name,
+            "tier": p.tier,
+            "feature_type": p.feature_type,
+            "point": nm((p.longitude, p.latitude)),
+        }
+        for p in source.pois
+    ]
+    places = [
+        {"id": p.id, "name": p.name, "kind": p.kind, "point": nm((p.longitude, p.latitude))}
+        for p in source.places
+    ]
+    return {"frame": frame.to_dict(), "roads": roads, "ground": ground, "pois": pois, "places": places}
+
+
 def detail_level_for(region: RegionBBox) -> str:
     area = region.area_km2
     for limit, tier in DETAIL_TIERS:

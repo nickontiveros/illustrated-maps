@@ -119,6 +119,31 @@ def test_composition_round_trip_and_applied_to_plan(client, project_payload):
     assert "maritime_museum" in ids
 
 
+def test_source_geojson_and_preview_plan(client, project_payload):
+    project_id = _create(client, project_payload)
+    # Both editor endpoints need the persisted source from a plan run.
+    assert client.get(f"/api/v2/projects/{project_id}/source.geojson").status_code == 404
+    assert client.post(f"/api/v2/projects/{project_id}/preview-plan", json={}).status_code == 404
+
+    client.post(f"/api/v2/projects/{project_id}/plan")
+
+    gj = client.get(f"/api/v2/projects/{project_id}/source.geojson")
+    assert gj.status_code == 200
+    data = gj.json()
+    assert data["pois"] and all(p["id"] for p in data["pois"])  # ids present
+    assert all(len(p["point"]) == 2 for p in data["pois"])  # normalized (u, v)
+    assert "roads" in data and "ground" in data
+
+    # Live preview honors an in-flight spec without persisting it.
+    spec = {"features": {"pois": {"exclude": ["old_lighthouse"]}}}
+    pv = client.post(f"/api/v2/projects/{project_id}/preview-plan", json=spec)
+    assert pv.status_code == 200
+    assert "<svg" in pv.json()["svg"]
+    # preview-plan must not write composition.json.
+    saved = client.get(f"/api/v2/projects/{project_id}/composition").json()
+    assert saved["features"]["pois"]["exclude"] == []
+
+
 def test_assets_require_plan(client, project_payload):
     project_id = _create(client, project_payload)
     response = client.post(f"/api/v2/projects/{project_id}/assets", json={"stub": True})

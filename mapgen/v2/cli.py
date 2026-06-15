@@ -19,6 +19,7 @@ import click
 
 from . import pipeline
 from .compose_spec import CompositionSpec
+from .ingest import SOURCE_FILENAME, assign_feature_ids, save_source
 from .types import PlanDocument
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ def plan(project_dir: str) -> None:
     project, directory = _load_project(project_dir)
     click.echo(f"Fetching OSM data for {project.name}...")
     source = pipeline.fetch_source(project, cache_dir=directory / "cache")
+    assign_feature_ids(source)  # ensure stable ids before persisting
+    save_source(source, directory / SOURCE_FILENAME)  # for the editor / preview-plan
     spec = CompositionSpec.load_or_default(directory)
     document = pipeline.build_plan(project, source, spec=spec)
     plan_path, preview_path = pipeline.write_plan(document, directory)

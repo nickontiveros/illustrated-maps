@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from ...v2 import pipeline
 from ...v2.compose_spec import COMPOSITION_FILENAME, CompositionSpec
 from ...v2.assets.manifest import slugify
+from ...v2.ingest import SOURCE_FILENAME, assign_feature_ids, load_source, save_source
 from ...v2.types import PlanDocument
 
 logger = logging.getLogger(__name__)
@@ -283,6 +284,8 @@ def start_plan(project_id: str, background: BackgroundTasks) -> dict:
 
     def work() -> None:
         source = pipeline.fetch_source(project, cache_dir=directory / "cache")
+        assign_feature_ids(source)  # ensure stable ids before persisting
+        save_source(source, directory / SOURCE_FILENAME)  # for the editor / preview-plan
         spec = CompositionSpec.load_or_default(directory)
         document = pipeline.build_plan(project, source, spec=spec)
         pipeline.write_plan(document, directory)
@@ -323,6 +326,35 @@ def put_composition(project_id: str, spec: CompositionSpec) -> dict:
     _, directory = _load_project(project_id)
     spec.save(directory / COMPOSITION_FILENAME)
     return {"saved": True, "version": spec.version}
+
+
+@router.get("/{project_id}/source.geojson")
+def get_source_geojson(project_id: str) -> dict:
+    """Source features in normalized frame space for the layout editor."""
+    project, directory = _load_project(project_id)
+    src_path = directory / SOURCE_FILENAME
+    if not src_path.exists():
+        raise HTTPException(404, "No source yet; run the plan stage first")
+    source = load_source(src_path)
+    return pipeline.source_to_normalized(source, pipeline.make_frame(project))
+
+
+@router.post("/{project_id}/preview-plan")
+def preview_plan(project_id: str, spec: CompositionSpec) -> dict:
+    """Apply an in-flight spec to the cached source and return a preview SVG.
+    No OSM fetch, no AI, no persistence -- drives the editor's live preview."""
+    project, directory = _load_project(project_id)
+    src_path = directory / SOURCE_FILENAME
+    if not src_path.exists():
+        raise HTTPException(404, "No source yet; run the plan stage first")
+    source = load_source(src_path)
+    document = pipeline.build_plan(project, source, spec=spec)
+    warp_fit = document.provenance.get("warp_fit", {})
+    return {
+        "svg": pipeline.plan_to_svg(document),
+        "warnings": document.warnings,
+        "coincident_count": warp_fit.get("coincident_count", 0),
+    }
 
 
 class AssetsRequest(BaseModel):
