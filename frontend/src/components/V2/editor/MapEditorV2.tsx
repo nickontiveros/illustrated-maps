@@ -189,22 +189,33 @@ function MapEditorV2() {
               const isRiver = r.cls === 'river' || r.cls === 'stream';
               const layer = isRiver ? 'rivers' : 'roads';
               const visible = ed.isVisible(layer, r.id);
+              const pts = r.points.map(([u, v]) => px(u, v).join(',')).join(' ');
               return (
-                <polyline
-                  key={r.id}
-                  points={r.points.map(([u, v]) => px(u, v).join(',')).join(' ')}
-                  fill="none"
-                  stroke={isRiver ? '#5b8fb0' : '#8a7f6b'}
-                  strokeWidth={isRiver ? 3 : 2}
-                  strokeOpacity={visible ? 0.9 : 0.18}
-                  strokeDasharray={visible ? undefined : '4 4'}
-                  className={ed.mode === 'select' ? 'cursor-pointer' : ''}
-                  onClick={(e) => {
-                    if (ed.mode !== 'select') return;
-                    e.stopPropagation();
-                    ed.toggleFeature(layer, r.id);
-                  }}
-                />
+                <g key={r.id}>
+                  <polyline
+                    points={pts}
+                    fill="none"
+                    stroke={isRiver ? '#5b8fb0' : '#8a7f6b'}
+                    strokeWidth={isRiver ? 3 : 2}
+                    strokeOpacity={visible ? 0.9 : 0.18}
+                    strokeDasharray={visible ? undefined : '4 4'}
+                    pointerEvents="none"
+                  />
+                  {ed.mode === 'select' && (
+                    <polyline
+                      points={pts}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={14}
+                      pointerEvents="stroke"
+                      className="cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        ed.toggleFeature(layer, r.id);
+                      }}
+                    />
+                  )}
+                </g>
               );
             })}
             {/* places */}
@@ -285,6 +296,9 @@ function MapEditorV2() {
                   stroke="#6366f1"
                   strokeWidth={selected ? 2 : 1}
                   strokeDasharray="6 3"
+                  // Only interactive in warp mode -- otherwise the box would
+                  // swallow clicks meant for the POIs / roads underneath it.
+                  pointerEvents={ed.mode === 'warp' ? 'auto' : 'none'}
                   className={ed.mode === 'warp' ? 'cursor-move' : ''}
                   onClick={(e) => {
                     if (ed.mode !== 'warp') return;
