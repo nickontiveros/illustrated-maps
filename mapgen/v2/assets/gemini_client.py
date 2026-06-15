@@ -36,7 +36,7 @@ def build_prompt(spec: AssetSpec, style: StyleSpec) -> str:
     if spec.kind == AssetKind.STYLE_BIBLE:
         return (
             f"A small corner of an imaginary illustrated tourist map: {style_clause}. "
-            "Show a little coastline, a road, a few buildings and trees. "
+            f"Show {style.scene}. "
             "This image defines the palette and brushwork for a whole map series. "
             "No text anywhere."
         )
@@ -63,11 +63,23 @@ def build_prompt(spec: AssetSpec, style: StyleSpec) -> str:
         )
     if spec.kind == AssetKind.POI_SPRITE:
         photo_clause = (
-            "Use the attached photograph as the architectural reference; keep the "
-            "building recognizable with its iconic silhouette. "
+            "Use the attached photograph as the visual reference; keep the "
+            "subject recognizable with its iconic silhouette. "
             if spec.source_photo
             else ""
         )
+        if spec.prompt_hints:
+            # Typed landmark (mountain, park, campus, ...): the hint says what
+            # to actually paint; no building coercion.
+            return (
+                f"An illustrated landmark for a tourist map: {spec.subject}. {photo_clause}"
+                f"Important: {spec.prompt_hints}. "
+                f"{style_clause}, {CAMERA_CLAUSE}, slightly exaggerated charming "
+                f"proportions, simplified but recognizable details. Draw the landmark "
+                f"as ONE compact isolated vignette with nothing around it: no streets, "
+                f"no sky, no surrounding map, no base or platform under it, no signage "
+                f"text. The vignette must be {KEY_CLAUSE}."
+            )
         return (
             f"An illustrated landmark for a tourist map: {spec.subject}. {photo_clause}"
             f"{style_clause}, {CAMERA_CLAUSE}, slightly exaggerated charming proportions, "
@@ -113,10 +125,20 @@ class GeminiAssetGenerator:
             contents.append("STYLE REFERENCE — copy only the palette, brushwork and mood:")
             contents.append(style_reference)
         if spec.source_photo:
-            photo = Image.open(spec.source_photo).convert("RGB")
-            photo.thumbnail((1024, 1024))
-            contents.append("ARCHITECTURAL REFERENCE PHOTO:")
-            contents.append(photo)
+            # A missing/corrupt reference photo downgrades to a text-only
+            # prompt -- it must never abort a paid batch.
+            try:
+                photo = Image.open(spec.source_photo).convert("RGB")
+                photo.thumbnail((1024, 1024))
+                contents.append("ARCHITECTURAL REFERENCE PHOTO:")
+                contents.append(photo)
+            except Exception as exc:
+                logger.warning(
+                    "Reference photo %r for %s unusable (%s); generating without it",
+                    spec.source_photo,
+                    spec.id,
+                    exc,
+                )
         contents.append(prompt)
 
         last_error: Exception | None = None

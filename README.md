@@ -113,8 +113,8 @@ Open http://localhost:5173:
 
 - **Create a map** — title, region bounds, and POIs (name, coordinates, importance tier)
 - **Manage POIs after creation** — add, edit, or remove points of interest at any time; the UI flags the plan as stale until you re-plan, and only new/changed assets are regenerated
-- **Run the three stages** with live progress: Plan (free) → Assets (AI or stub) → Compose (pick render scale, optional harmonize pass)
-- **Review everything** — SVG plan preview, per-asset gallery with one-click regeneration, and the final poster
+- **Run the stages** with live progress: Plan (free) → Assets (AI or stub) → Compose (pick render scale, optional harmonize pass) → optional Repaint (hand-painted texture pass: one whole-poster AI call, only its low/mid-frequency texture is blended over the native render, so geometry and labels stay pixel-exact and seams are impossible)
+- **Review everything** — SVG plan preview, per-asset gallery with one-click regeneration (palette outliers flagged automatically, flag any asset for batch redo), the repaint quadrant grid (click a painted cell to flag it for redo), and the final poster
 - The Gemini key can be supplied via the backend `GOOGLE_API_KEY` env var or per-request from the browser (stored in localStorage, sent as `X-Google-API-Key`)
 
 POI tiers control prominence on the map: **Hero** (tier 1) landmarks render large, **Major** (tier 2) medium, **Minor** (tier 3) small.
@@ -126,9 +126,10 @@ POI tiers control prominence on the map: **Hero** (tier 1) landmarks render larg
 | `mapgen v2 plan PROJECT` | Build `plan.json` + `preview.svg` from live OSM data (free) |
 | `mapgen v2 assets PROJECT` | Generate all assets in the plan manifest (cached by content hash) |
 | `mapgen v2 compose PROJECT` | Render the poster from plan + assets |
+| `mapgen v2 repaint PROJECT` | Hand-painted texture pass over the poster base (1 AI call) |
 | `mapgen v2 generate PROJECT` | Full pipeline: plan → assets → compose |
 
-Useful flags: `--stub` (offline procedural assets, no cost), `--force` (ignore cache), `--only ID` (regenerate specific assets), `--scale 0.25` (preview-quality render), `--harmonize` (low-frequency AI mood pass).
+Useful flags: `--stub` (offline procedural assets, no cost), `--force` (ignore cache), `--only ID` (regenerate specific assets), `--scale 0.25` (preview-quality render), `--harmonize` (low-frequency AI mood pass). For `repaint`: `--strength` (texture blend dial), `--dry-run` (call count + cost, spends nothing), and `--tiled` for the experimental window-by-window engine (`--repaint-scale`, `--max-calls`; needs a fine-tuned exact-infill model to be seam-free — zero-shot models redraw the context pixels, so joints misalign).
 
 ## Cost
 
@@ -139,8 +140,9 @@ Useful flags: `--stub` (offline procedural assets, no cost), `--force` (ignore c
 | Re-render / re-plan after edits | 0 (assets are cached) |
 | Adding one POI | 1 |
 | Harmonize pass | 1 |
+| Repaint texture pass | 1 (whole poster; experimental `--tiled` mode is ~40–46) |
 
-Raw generations are kept under `assets/raw/`, so post-processing improvements re-apply without new API calls.
+Raw generations are kept under `assets/raw/` (and `repaint/raw/`), so post-processing improvements re-apply without new API calls. Repaint runs are resumable: quadrant state lives in `repaint/repaint.db`.
 
 ## Project layout
 

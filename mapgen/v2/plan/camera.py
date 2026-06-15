@@ -65,6 +65,21 @@ class ObliqueCamera:
         """Local isotropic scale factor (used to size sprites by depth)."""
         return self.width_scale(y_flat)
 
+    def t_at_poster_y(self, poster_y: float) -> float:
+        """Invert the vertical projection: poster y -> far-near parameter t.
+
+        project_point maps t through the integral of the linear scale
+        profile; this solves that quadratic back, so poster-space samplers
+        (e.g. bare-land scatter) can recover depth and local width."""
+        vs = self.spec.vertical_scale
+        c = max(0.0, (poster_y - self.horizon_px) / self.map_height_px) * self._mean_scale
+        a = (1.0 - vs) / 2.0
+        if a < 1e-9:
+            t = c / max(1e-9, vs)
+        else:
+            t = (-vs + math.sqrt(vs * vs + 4.0 * a * c)) / (2.0 * a)
+        return min(1.0, max(0.0, t))
+
 
 def densify(points: list[Point], max_seg_px: float) -> list[Point]:
     """Insert vertices so no segment exceeds max_seg_px (in flat space)."""

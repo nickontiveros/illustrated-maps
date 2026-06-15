@@ -69,6 +69,12 @@ def plan(project_dir: str) -> None:
         f"{len(document.pois)} POIs, {len(document.labels)} labels, "
         f"{len(document.manifest)} assets to generate"
     )
+    _echo_warnings(document)
+
+
+def _echo_warnings(document: PlanDocument) -> None:
+    for message in document.warnings:
+        click.secho(f"  WARNING: {message}", fg="yellow", err=True)
 
 
 @v2.command()
@@ -76,21 +82,43 @@ def plan(project_dir: str) -> None:
 @click.option("--stub", is_flag=True, help="Use the offline procedural generator (no API cost).")
 @click.option("--force", is_flag=True, help="Regenerate even if cached.")
 @click.option("--only", "only_ids", multiple=True, help="Regenerate only these asset ids.")
-def assets(project_dir: str, stub: bool, force: bool, only_ids: tuple[str, ...]) -> None:
+@click.option(
+    "--reprocess",
+    is_flag=True,
+    help="Re-run matting/post-processing from the saved raw generations (no API cost).",
+)
+def assets(project_dir: str, stub: bool, force: bool, only_ids: tuple[str, ...], reprocess: bool) -> None:
     """Generate all assets in the plan manifest (cached by content hash)."""
     _, directory = _load_project(project_dir)
     document = _load_plan(directory)
-    generator = _make_generator(stub)
 
     def report(asset_id: str, i: int, total: int) -> None:
         if asset_id != "done":
             click.echo(f"  [{i + 1}/{total}] {asset_id}")
 
-    studio = pipeline.AssetStudio(generator, directory / pipeline.ASSETS_DIRNAME)
+    studio = pipeline.AssetStudio(_make_generator(stub or reprocess), directory / pipeline.ASSETS_DIRNAME)
+    if reprocess:
+        paths = studio.reprocess_all(document, only_ids=set(only_ids) or None, progress=report)
+        click.echo(f"{len(paths)} assets reprocessed from raw in {directory / pipeline.ASSETS_DIRNAME}")
+        return
+
     paths = studio.generate_all(
         document, force=force, only_ids=set(only_ids) or None, progress=report
     )
     click.echo(f"{len(paths)} assets ready in {directory / pipeline.ASSETS_DIRNAME}")
+
+
+@v2.command()
+@click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
+@click.argument("title")
+def retitle(project_dir: str, title: str) -> None:
+    """Change the poster title without re-planning (then re-run compose)."""
+    _, directory = _load_project(project_dir)
+    patched = pipeline.retitle_project(directory, title)
+    if patched:
+        click.echo(f"Title set to {title!r}; plan patched. Run `mapgen v2 compose` to re-render.")
+    else:
+        click.echo(f"Title set to {title!r} (no plan yet; it will apply when you plan).")
 
 
 def _make_mood_pass(harmonize: bool):
@@ -122,6 +150,70 @@ def compose(project_dir: str, scale: float, harmonize: bool, output: str | None)
 
 @v2.command()
 @click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--scale", default=1.0, show_default=True, help="Final poster scale.")
+@click.option("--strength", default=1.0, show_default=True, help="Texture blend strength (single mode).")
+@click.option("--tiled", is_flag=True, help="EXPERIMENTAL: window-by-window infill engine; seam-free only with a fine-tuned exact-infill painter (zero-shot models redraw context pixels).")
+@click.option("--repaint-scale", default=0.5, show_default=True, help="Tiled mode: AI repaint resolution (fraction of full size).")
+@click.option("--max-calls", type=int, default=None, help="Tiled mode: hard budget of model calls; stop (resumably) when reached.")
+@click.option("--dry-run", is_flag=True, help="Print the planned call count and cost; spend nothing.")
+@click.option("--stub", is_flag=True, help="Identity painter: exercise the machinery without API calls.")
+def repaint(project_dir: str, scale: float, strength: float, tiled: bool, repaint_scale: float, max_calls: int | None, dry_run: bool, stub: bool) -> None:
+    """AI hand-painted texture pass over the poster base.
+
+    Default (single) mode: ONE whole-base img2img call; only its low/mid
+    frequency texture is blended over the native render, so geometry and
+    linework stay pixel-exact, no seams are possible, and labels/frame/grain
+    composite on top at native resolution. ~$0.13 per poster.
+    """
+    _, directory = _load_project(project_dir)
+    document = _load_plan(directory)
+
+    def report(i: int, total: int, detail: str) -> None:
+        click.echo(f"  [{min(i + 1, total)}/{total}] {detail}")
+
+    if not tiled:
+        if dry_run:
+            click.echo(f"Single texture pass: 1 call (~${pipeline.REPAINT_COST_PER_CALL})")
+            return
+        if stub:
+            from .repaint import IdentityTexturePass
+
+            painter = IdentityTexturePass()
+        else:
+            from .repaint import GeminiTexturePass
+
+            painter = GeminiTexturePass()
+        out = pipeline.texture_poster(
+            document, directory, painter, scale=scale, strength=strength, progress=report
+        )
+        click.echo(f"Poster: {out}")
+        return
+
+    if dry_run:
+        info = pipeline.plan_repaint(document, directory, repaint_scale=repaint_scale)
+        click.echo(
+            f"Grid {info['grid']['cols']}x{info['grid']['rows']} at scale {repaint_scale}: "
+            f"{info['calls_planned']} calls (~${info['estimated_cost_usd']})"
+        )
+        return
+    if stub:
+        from .repaint import IdentityPainter
+
+        painter = IdentityPainter()
+    else:
+        from .repaint import GeminiPainter
+
+        painter = GeminiPainter()
+    out, result = pipeline.repaint_poster(
+        document, directory, painter,
+        scale=scale, repaint_scale=repaint_scale, max_calls=max_calls, progress=report,
+    )
+    state = "complete" if result.completed else f"stopped at budget ({result.calls_made} calls); re-run to resume"
+    click.echo(f"Poster: {out} ({result.calls_made} calls, {state})")
+
+
+@v2.command()
+@click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--stub", is_flag=True, help="Use the offline procedural generator (no API cost).")
 @click.option("--harmonize", is_flag=True, help="Apply the low-frequency AI mood pass (one Gemini call).")
 @click.option("--scale", default=1.0, show_default=True)
@@ -132,6 +224,7 @@ def generate(project_dir: str, stub: bool, harmonize: bool, scale: float) -> Non
     source = pipeline.fetch_source(project, cache_dir=directory / "cache")
     document = pipeline.build_plan(project, source)
     pipeline.write_plan(document, directory)
+    _echo_warnings(document)
     click.echo("[2/3] Generating assets...")
     pipeline.generate_assets(document, directory, _make_generator(stub))
     click.echo("[3/3] Composing poster...")

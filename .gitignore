@@ -46,6 +46,7 @@ projects/*/logos/
 .coverage
 htmlcov/
 .pytest_cache/
+tests/artifacts/
 
 # Reference images (examples in root)
 *.jpg

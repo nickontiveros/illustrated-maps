@@ -37,10 +37,12 @@ def test_poi_sprite_oversamples_footprint():
     assert spec.width_px == 1800
 
 
-def test_matting_removes_key_and_keeps_content():
+def test_matting_removes_key_and_keeps_content(artifacts):
     img = Image.new("RGB", (50, 50), KEY_COLOR)
     img.paste((120, 80, 40), (10, 10, 40, 40))
     rgba = key_to_alpha(img)
+    artifacts.save("keyed_input", img)
+    artifacts.save("matted", rgba)
     arr = np.asarray(rgba)
     assert arr[0, 0, 3] == 0  # key corner transparent
     assert arr[25, 25, 3] == 255  # content opaque
@@ -77,9 +79,13 @@ def _blotchy_texture(size: int = 128, seed: int = 3) -> Image.Image:
     return Image.fromarray(np.dstack([arr, arr, arr]), "RGB")
 
 
-def test_tiled_mosaic_join_is_invisible():
+def test_tiled_mosaic_join_is_invisible(artifacts):
     """Tiling two copies side by side must not produce a visible seam."""
     tileable = make_tileable(_blotchy_texture())
+    mosaic = Image.new("RGB", (tileable.width * 2, tileable.height))
+    mosaic.paste(tileable, (0, 0))
+    mosaic.paste(tileable, (tileable.width, 0))
+    artifacts.save("mosaic_2x1", mosaic)
     arr = np.asarray(tileable, dtype=np.float32)
     w = arr.shape[1]
     join_diff = np.abs(arr[:, -1] - arr[:, 0]).mean()  # column W-1 abuts column 0

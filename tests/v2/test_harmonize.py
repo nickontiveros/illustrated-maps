@@ -39,9 +39,11 @@ def test_strength_zero_is_identity():
     assert out is poster
 
 
-def test_mood_shifts_color_globally():
+def test_mood_shifts_color_globally(artifacts):
     poster = _poster()
     out = harmonize(poster, WarmTintPass(), StyleSpec(), strength=1.0)
+    artifacts.save("before", poster)
+    artifacts.save("after", out)
     before = np.asarray(poster, dtype=np.float32)
     after = np.asarray(out, dtype=np.float32)
     # Red goes up, blue goes down, on average.
@@ -61,9 +63,10 @@ def test_detail_survives_harmonization():
     assert edge_after > edge_before * 0.8
 
 
-def test_high_frequency_vandalism_is_filtered_out():
+def test_high_frequency_vandalism_is_filtered_out(artifacts):
     poster = _poster()
     out = harmonize(poster, VandalPass(), StyleSpec(), strength=1.0)
+    artifacts.save("vandal_filtered", out)
     after = np.asarray(out, dtype=np.float32)
     before = np.asarray(poster, dtype=np.float32)
     # The checkerboard would flip half the pixels to magenta; after the

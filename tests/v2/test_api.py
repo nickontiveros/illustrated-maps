@@ -134,6 +134,109 @@ def test_full_pipeline_via_api(client, project_payload):
     assert summary["has_plan"] and summary["has_poster"]
 
 
+def test_asset_flagging(client, project_payload):
+    project_id = _create(client, project_payload)
+    client.post(f"/api/v2/projects/{project_id}/plan")
+    client.post(f"/api/v2/projects/{project_id}/assets", json={"stub": True})
+
+    listed = client.get(f"/api/v2/projects/{project_id}/assets").json()
+    assert all(a["flagged"] is False for a in listed)
+    assert all("palette_score" in a and "palette_outlier" in a for a in listed)
+    asset_id = listed[0]["id"]
+
+    assert client.post(
+        f"/api/v2/projects/{project_id}/assets/{asset_id}/flag", json={"flagged": True}
+    ).json() == {"id": asset_id, "flagged": True}
+    listed = client.get(f"/api/v2/projects/{project_id}/assets").json()
+    assert [a["id"] for a in listed if a["flagged"]] == [asset_id]
+
+    # Regenerating the flagged asset clears the flag (meta is rewritten).
+    client.post(
+        f"/api/v2/projects/{project_id}/assets",
+        json={"stub": True, "force": True, "only_ids": [asset_id]},
+    )
+    listed = client.get(f"/api/v2/projects/{project_id}/assets").json()
+    assert not any(a["flagged"] for a in listed)
+
+    # Flagging an ungenerated asset 404s.
+    assert client.post(
+        f"/api/v2/projects/{project_id}/assets/never_generated/flag", json={"flagged": True}
+    ).status_code == 404
+
+
+def test_repaint_stage_via_api(client, region):
+    payload = {
+        "name": "Repaint Town",
+        "region": region.model_dump(),
+        # Large enough for the 512px quadrant grid at repaint_scale=1.0.
+        "output": {"width_px": 1100, "height_px": 1500, "dpi": 72},
+        "pois": [],
+    }
+    project_id = _create(client, payload)
+    client.post(f"/api/v2/projects/{project_id}/plan")
+    client.post(f"/api/v2/projects/{project_id}/assets", json={"stub": True})
+
+    # No repaint yet: empty grid state, flagging conflicts.
+    assert client.get(f"/api/v2/projects/{project_id}/repaint/quadrants").json() == {
+        "grid": None,
+        "quadrants": [],
+    }
+    assert client.post(
+        f"/api/v2/projects/{project_id}/repaint/quadrants/0/0/flag", json={"flagged": True}
+    ).status_code == 409
+
+    # Default-mode (single) dry run: always exactly 1 call, instant.
+    dry = client.post(
+        f"/api/v2/projects/{project_id}/repaint", json={"dry_run": True}
+    ).json()
+    assert dry == {
+        "stage": "repaint", "state": "dry_run", "mode": "single",
+        "calls_planned": 1, "estimated_cost_usd": dry["estimated_cost_usd"],
+    }
+
+    # Default-mode (single) stub run end to end.
+    started = client.post(
+        f"/api/v2/projects/{project_id}/repaint", json={"stub": True, "scale": 0.5}
+    )
+    assert started.status_code == 202 and started.json()["mode"] == "single"
+    status = client.get(f"/api/v2/projects/{project_id}/status").json()
+    assert status["repaint"]["state"] == "done", status["repaint"]
+    assert client.get(f"/api/v2/projects/{project_id}/poster").status_code == 200
+    # Single mode runs no quadrant grid.
+    assert client.get(f"/api/v2/projects/{project_id}/repaint/quadrants").json()["grid"] is None
+
+    # Tiled dry run: synchronous plan, no spend.
+    dry = client.post(
+        f"/api/v2/projects/{project_id}/repaint",
+        json={"mode": "tiled", "dry_run": True, "repaint_scale": 1.0},
+    ).json()
+    assert dry["state"] == "dry_run" and dry["mode"] == "tiled"
+    assert dry["calls_planned"] > 0 and dry["estimated_cost_usd"] > 0
+
+    # Tiled stub run (IdentityPainter) end to end.
+    assert client.post(
+        f"/api/v2/projects/{project_id}/repaint",
+        json={"mode": "tiled", "stub": True, "repaint_scale": 1.0},
+    ).status_code == 202
+    status = client.get(f"/api/v2/projects/{project_id}/status").json()
+    assert status["repaint"]["state"] == "done", status["repaint"]
+
+    state = client.get(f"/api/v2/projects/{project_id}/repaint/quadrants").json()
+    assert state["grid"]["cols"] >= 2 and state["calls_made"] > 0
+    painted = [q for q in state["quadrants"] if q["status"] == "generated"]
+    assert painted
+
+    # Flag one painted quadrant, then unflag.
+    q = painted[0]
+    flagged = client.post(
+        f"/api/v2/projects/{project_id}/repaint/quadrants/{q['x']}/{q['y']}/flag",
+        json={"flagged": True},
+    ).json()
+    assert flagged["status"] == "flagged"
+    state = client.get(f"/api/v2/projects/{project_id}/repaint/quadrants").json()
+    assert {"x": q["x"], "y": q["y"], "status": "flagged"} in state["quadrants"]
+
+
 def test_stage_error_is_reported(client, project_payload, monkeypatch):
     project_id = _create(client, project_payload)
     monkeypatch.setattr(

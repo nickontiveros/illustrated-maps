@@ -47,3 +47,37 @@ def test_identity_warp():
     warp = IdentityWarp()
     assert warp.warp_point((0.3, 0.4)) == (0.3, 0.4)
     assert warp.warp_points([(0.1, 0.2)]) == [(0.1, 0.2)]
+
+
+def test_default_weights_radii_match_legacy_formula():
+    """Omitting weights/radii reproduces the original single-radius warp."""
+    centers = [(0.3, 0.6), (0.7, 0.4)]
+    legacy = ImportanceWarp(centers=centers, strength=1.0, radius=0.15)
+    explicit = ImportanceWarp(
+        centers=centers, strength=1.0, radius=0.15, weights=[1.0, 1.0], radii=[0.15, 0.15]
+    )
+    for p in [(0.1, 0.2), (0.5, 0.5), (0.85, 0.7)]:
+        assert explicit.warp_point(p) == pytest.approx(legacy.warp_point(p))
+
+
+def test_heavier_weight_expands_more():
+    """A higher-demand center claims more space than an equal-radius peer."""
+    light = ImportanceWarp(centers=[(0.3, 0.5), (0.7, 0.5)], strength=1.0, radius=0.08,
+                           weights=[1.0, 1.0], radii=[0.08, 0.08])
+    heavy = ImportanceWarp(centers=[(0.3, 0.5), (0.7, 0.5)], strength=1.0, radius=0.08,
+                           weights=[3.0, 1.0], radii=[0.08, 0.08])
+
+    def span(w, c):
+        return w.warp_point((c + 0.04, 0.5))[0] - w.warp_point((c - 0.04, 0.5))[0]
+
+    assert span(heavy, 0.3) > span(light, 0.3)  # heavy center gets more room
+
+
+def test_narrow_radius_keeps_expansion_local():
+    """A tight per-center sigma concentrates magnification near the center."""
+    wide = ImportanceWarp(centers=[(0.5, 0.5)], strength=2.0, radii=[0.18])
+    narrow = ImportanceWarp(centers=[(0.5, 0.5)], strength=2.0, radii=[0.03])
+    # Far from the center, the narrow bump perturbs the mapping far less.
+    assert abs(narrow.warp_point((0.15, 0.5))[0] - 0.15) < abs(
+        wide.warp_point((0.15, 0.5))[0] - 0.15
+    )

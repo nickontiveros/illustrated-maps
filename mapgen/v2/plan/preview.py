@@ -23,6 +23,9 @@ ROAD_DRAW_ORDER = [
     RoadClass.RIVER,
 ]
 
+MAX_PREVIEW_ROADS = 6000
+MAX_PREVIEW_BUILDINGS = 4000
+
 
 def _path_d(points: list[Point], close: bool = False) -> str:
     if not points:
@@ -57,8 +60,29 @@ def plan_to_svg(plan: PlanDocument, scale: float = 0.12) -> str:
             d += " " + _path_d(hole, close=True)
         out.append(f'<path d="{d}" fill="{fill}" fill-rule="evenodd" stroke="{palette["outline"]}" stroke-width="2" stroke-opacity="0.35"/>')
 
+    # The preview is a layout-review tool, not an archive: cap the feature
+    # count so the SVG stays loadable in a browser whatever the region size.
+    # Roads are kept by (class priority, length); the cap is generous enough
+    # that city-scale plans are never trimmed.
+    roads = plan.roads
+    if len(roads) > MAX_PREVIEW_ROADS:
+        from .stylize import ROAD_PRIORITY, polyline_length
+
+        roads = sorted(
+            roads,
+            key=lambda r: (ROAD_PRIORITY.get(r.cls, 0), polyline_length(r.points)),
+            reverse=True,
+        )[:MAX_PREVIEW_ROADS]
+        out.append(f"<!-- preview truncated to {MAX_PREVIEW_ROADS} of {len(plan.roads)} roads -->")
+    buildings = plan.buildings
+    if len(buildings) > MAX_PREVIEW_BUILDINGS:
+        buildings = buildings[:MAX_PREVIEW_BUILDINGS]
+        out.append(
+            f"<!-- preview truncated to {MAX_PREVIEW_BUILDINGS} of {len(plan.buildings)} buildings -->"
+        )
+
     order = {cls: i for i, cls in enumerate(ROAD_DRAW_ORDER)}
-    for road in sorted(plan.roads, key=lambda r: order.get(r.cls, 0)):
+    for road in sorted(roads, key=lambda r: order.get(r.cls, 0)):
         if road.cls in (RoadClass.RIVER, RoadClass.STREAM):
             color = palette["water"]
         elif road.cls == RoadClass.MOTORWAY:
@@ -76,13 +100,25 @@ def plan_to_svg(plan: PlanDocument, scale: float = 0.12) -> str:
             f'stroke-width="{road.width_px:.1f}" stroke-linecap="round" stroke-linejoin="round"/>'
         )
 
-    for b in plan.buildings:
+    for b in buildings:
         out.append(
             f'<path d="{_path_d(b.polygon, close=True)}" fill="{palette["building_roof"]}" '
             f'stroke="{palette["outline"]}" stroke-width="1.5"/>'
         )
 
     for slot in plan.pois:
+        # Coincident POIs are offset into open space with a connector back to
+        # their true ground point; draw it (and the dot) under the sprite rect.
+        if slot.offset and slot.leader_anchor is not None:
+            tx, ty = slot.leader_anchor
+            out.append(
+                f'<line x1="{slot.anchor[0]:.0f}" y1="{slot.anchor[1]:.0f}" '
+                f'x2="{tx:.0f}" y2="{ty:.0f}" stroke="{palette["outline"]}" '
+                f'stroke-width="3" stroke-opacity="0.7"/>'
+            )
+            out.append(
+                f'<circle cx="{tx:.0f}" cy="{ty:.0f}" r="8" fill="{palette["outline"]}"/>'
+            )
         x0 = slot.anchor[0] - slot.width_px / 2
         y0 = slot.anchor[1] - slot.height_px
         out.append(

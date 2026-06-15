@@ -129,18 +129,57 @@ def polyline_length(points: list[Point]) -> float:
     return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:]))
 
 
+# Fraction of the map plate the drawn road ribbons may cover. The Manhattan
+# reference plan uses ~0.13, so city plans pass untouched; the unpruned
+# Arizona plan measured 0.50 (an unreadable mat) and gets cut to budget.
+ROAD_INK_BUDGET = 0.24
+
+# Rivers and motorways are the map's skeleton; they are never dropped.
+EXEMPT_PRIORITY = ROAD_PRIORITY[RoadClass.MOTORWAY]
+
+
 def prune_roads(
     roads: list[tuple[RoadClass, list[Point]]],
     canvas_width_px: int,
+    area_px: float | None = None,
+    ink_budget: float = ROAD_INK_BUDGET,
     max_minor_roads: int = 400,
 ) -> list[tuple[RoadClass, list[Point]]]:
-    """Keep the map breathing: drop short minor roads in dense areas.
+    """Keep the map breathing: cap total road ink, not just minor-road count.
 
-    Major classes are always kept. LOCAL/PATH are kept longest-first up to
-    max_minor_roads, and never when shorter than ~1.5% of poster width.
+    Ink is approximated as centerline length x class ribbon width. Roads are
+    admitted by (class priority, length) until the budget is spent; rivers
+    and motorways are always kept (their ink still counts), LOCAL/PATH keep
+    the historical count cap and minimum length on top of the budget.
     """
     min_len = 0.015 * canvas_width_px
-    majors = [r for r in roads if ROAD_PRIORITY[r[0]] >= 3]
-    minors = [r for r in roads if ROAD_PRIORITY[r[0]] < 3 and polyline_length(r[1]) >= min_len]
-    minors.sort(key=lambda r: polyline_length(r[1]), reverse=True)
-    return majors + minors[:max_minor_roads]
+    if area_px is None:
+        area_px = float(canvas_width_px) * canvas_width_px * 1.4
+
+    candidates: list[tuple[int, float, RoadClass, list[Point]]] = []
+    for cls, pts in roads:
+        length = polyline_length(pts)
+        if ROAD_PRIORITY[cls] < 3 and length < min_len:
+            continue
+        candidates.append((ROAD_PRIORITY[cls], length, cls, pts))
+    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+
+    kept: list[tuple[RoadClass, list[Point]]] = []
+    budget = ink_budget * area_px
+    ink = 0.0
+    minor_count = 0
+    for priority, length, cls, pts in candidates:
+        cost = length * road_width_px(cls, canvas_width_px)
+        if priority >= EXEMPT_PRIORITY:
+            kept.append((cls, pts))
+            ink += cost
+            continue
+        if ink + cost > budget:
+            continue
+        if priority < 3:
+            if minor_count >= max_minor_roads:
+                continue
+            minor_count += 1
+        kept.append((cls, pts))
+        ink += cost
+    return kept

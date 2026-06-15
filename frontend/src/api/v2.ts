@@ -17,14 +17,18 @@ export interface V2Poi {
   lon: number;
   tier: number;
   photo?: string | null;
+  feature_type?: string;
+  path?: [number, number][] | null;
 }
 
 export interface V2ProjectConfig {
   name: string;
+  title?: string | null;
   region: V2Region;
   output?: { width_px: number; height_px: number; dpi: number };
   camera?: { convergence: number; vertical_scale: number; horizon_margin: number };
   distortion_strength?: number;
+  rotation_deg?: number | 'auto';
   pois: V2Poi[];
 }
 
@@ -36,7 +40,30 @@ export interface V2JobState {
   total: number;
 }
 
-export type V2Status = Record<'plan' | 'assets' | 'compose', V2JobState>;
+export type V2Status = Record<'plan' | 'assets' | 'compose' | 'repaint', V2JobState>;
+
+export interface V2RepaintQuadrant {
+  x: number;
+  y: number;
+  status: 'pending' | 'generated' | 'skipped' | 'flagged';
+}
+
+export interface V2RepaintState {
+  grid: { cols: number; rows: number; repaint_scale: number } | null;
+  quadrants: V2RepaintQuadrant[];
+  calls_made?: number;
+}
+
+export interface V2RepaintDryRun {
+  stage: string;
+  state: string;
+  mode: 'single' | 'tiled';
+  calls_planned: number;
+  estimated_cost_usd: number;
+  // tiled mode only:
+  repaint_scale?: number;
+  grid?: { cols: number; rows: number };
+}
 
 export interface V2ProjectSummary {
   id: string;
@@ -59,6 +86,9 @@ export interface V2Asset {
   subject: string;
   cached: boolean;
   url: string;
+  palette_score: number | null;
+  palette_outlier: boolean;
+  flagged: boolean;
 }
 
 class V2ApiError extends Error {
@@ -110,6 +140,13 @@ export const v2api = {
       body: JSON.stringify(config),
     }).then((r) => handle<V2ProjectSummary>(r)),
 
+  retitle: (id: string, title: string) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/title`, {
+      method: 'PATCH',
+      headers: headers(true),
+      body: JSON.stringify({ title }),
+    }).then((r) => handle<{ title: string; plan_patched: boolean }>(r)),
+
   deleteProject: (id: string) =>
     fetch(`${API_BASE}/projects/${encodeURIComponent(id)}`, {
       method: 'DELETE',
@@ -139,12 +176,40 @@ export const v2api = {
       body: JSON.stringify(opts),
     }).then((r) => handle<{ stage: string }>(r)),
 
+  flagAsset: (id: string, assetId: string, flagged: boolean) =>
+    fetch(
+      `${API_BASE}/projects/${encodeURIComponent(id)}/assets/${encodeURIComponent(assetId)}/flag`,
+      { method: 'POST', headers: headers(true), body: JSON.stringify({ flagged }) }
+    ).then((r) => handle<{ id: string; flagged: boolean }>(r)),
+
   startCompose: (id: string, opts: { scale?: number; harmonize?: boolean }) =>
     fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/compose`, {
       method: 'POST',
       headers: headers(true),
       body: JSON.stringify(opts),
     }).then((r) => handle<{ stage: string }>(r)),
+
+  startRepaint: (
+    id: string,
+    opts: { scale?: number; repaint_scale?: number; max_calls?: number | null; dry_run?: boolean; stub?: boolean }
+  ) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/repaint`, {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify(opts),
+    }).then((r) => handle<V2RepaintDryRun | { stage: string; state: string }>(r)),
+
+  repaintQuadrants: (id: string) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/repaint/quadrants`, {
+      headers: headers(),
+    }).then((r) => handle<V2RepaintState>(r)),
+
+  flagRepaintQuadrant: (id: string, x: number, y: number, flagged: boolean) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/repaint/quadrants/${x}/${y}/flag`, {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({ flagged }),
+    }).then((r) => handle<{ x: number; y: number; status: string }>(r)),
 
   previewUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/preview.svg`,
   posterUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/poster`,

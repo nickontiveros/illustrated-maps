@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-STAGES = ("plan", "assets", "compose")
+STAGES = ("plan", "assets", "compose", "repaint")
 
 
 def projects_root() -> Path:
@@ -135,11 +135,30 @@ def _load_project(project_id: str) -> tuple[pipeline.V2Project, Path]:
         raise HTTPException(500, f"Invalid project.yaml: {exc}")
 
 
+# Parsed-plan cache keyed by file mtime: a large plan parsed into pydantic
+# models is hundreds of MB, and the UI polls endpoints that need it -- one
+# parse per plan version, never one per request.
+_plan_cache: dict[str, tuple[float, PlanDocument]] = {}
+_plan_cache_lock = threading.Lock()
+
+
 def _load_plan(directory: Path) -> PlanDocument:
     path = directory / pipeline.PLAN_FILENAME
     if not path.exists():
         raise HTTPException(409, "No plan yet; run the plan stage first")
-    return PlanDocument.load(path)
+    key = str(path)
+    mtime = path.stat().st_mtime
+    with _plan_cache_lock:
+        hit = _plan_cache.get(key)
+        if hit and hit[0] == mtime:
+            return hit[1]
+    document = PlanDocument.load(path)
+    with _plan_cache_lock:
+        _plan_cache[key] = (mtime, document)
+        # Bound the cache: keep only the most recent few plans.
+        while len(_plan_cache) > 4:
+            _plan_cache.pop(next(iter(_plan_cache)))
+    return document
 
 
 def _is_v2_project(directory: Path) -> bool:
@@ -217,6 +236,24 @@ def update_project(project_id: str, project: pipeline.V2Project) -> dict:
         raise HTTPException(409, "A stage is running; try again when it finishes")
     project.save(directory / "project.yaml")
     return _summary(project_id)
+
+
+class RetitleRequest(BaseModel):
+    title: str
+
+
+@router.patch("/{project_id}/title")
+def retitle_project(project_id: str, req: RetitleRequest) -> dict:
+    """Change the poster title without re-planning: patches project.yaml and
+    the existing plan's TITLE label in place. Re-run compose to re-render."""
+    _, directory = _load_project(project_id)
+    if jobs.is_running(project_id):
+        raise HTTPException(409, "A stage is running; try again when it finishes")
+    try:
+        plan_patched = pipeline.retitle_project(directory, req.title)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"title": req.title.strip(), "plan_patched": plan_patched}
 
 
 @router.delete("/{project_id}", status_code=204)
@@ -317,16 +354,42 @@ def list_assets(project_id: str) -> list[dict]:
     from ...v2.assets.stub import StubAssetGenerator
 
     studio = AssetStudio(StubAssetGenerator(), studio_dir)  # generator unused for cache checks
-    return [
-        {
-            "id": spec.id,
-            "kind": spec.kind.value,
-            "subject": spec.subject,
-            "cached": studio.is_cached(spec),
-            "url": f"/api/v2/projects/{project_id}/assets/{spec.id}",
-        }
-        for spec in document.manifest
-    ]
+    out = []
+    for spec in document.manifest:
+        meta = studio.read_meta(spec.id)
+        out.append(
+            {
+                "id": spec.id,
+                "kind": spec.kind.value,
+                "subject": spec.subject,
+                "cached": studio.is_cached(spec),
+                "url": f"/api/v2/projects/{project_id}/assets/{spec.id}",
+                "palette_score": meta.get("palette_score"),
+                "palette_outlier": meta.get("palette_outlier", False),
+                "flagged": meta.get("flagged", False),
+            }
+        )
+    return out
+
+
+class FlagRequest(BaseModel):
+    flagged: bool = True
+
+
+@router.post("/{project_id}/assets/{asset_id}/flag")
+def flag_asset(project_id: str, asset_id: str, req: FlagRequest) -> dict:
+    """Mark an asset for human-reviewed regeneration (or clear the mark).
+    Regenerate flagged assets via the assets stage with only_ids + force."""
+    _, directory = _load_project(project_id)
+    from ...v2.assets.studio import AssetStudio
+    from ...v2.assets.stub import StubAssetGenerator
+
+    studio = AssetStudio(StubAssetGenerator(), directory / pipeline.ASSETS_DIRNAME)
+    try:
+        meta = studio.set_flagged(slugify(asset_id), req.flagged)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Asset '{asset_id}' not generated yet")
+    return {"id": asset_id, "flagged": meta.get("flagged", False)}
 
 
 @router.get("/{project_id}/assets/{asset_id}")
@@ -362,6 +425,132 @@ def start_compose(project_id: str, req: ComposeRequest, background: BackgroundTa
 
     background.add_task(_run_stage, project_id, "compose", work)
     return {"stage": "compose", "state": "started"}
+
+
+class RepaintRequest(BaseModel):
+    mode: str = Field("single", pattern="^(single|tiled)$")
+    scale: float = Field(1.0, gt=0.0, le=1.0)  # final poster scale
+    strength: float = Field(1.0, ge=0.0, le=1.0)  # single mode: texture blend dial
+    repaint_scale: float = Field(0.5, gt=0.0, le=1.0)  # tiled mode: AI resolution
+    max_calls: Optional[int] = Field(None, ge=1)  # tiled mode: hard cost cap
+    dry_run: bool = False  # plan only, spend nothing
+    stub: bool = False  # identity painter (free, exercises the machinery)
+
+
+@router.post("/{project_id}/repaint", status_code=202)
+def start_repaint(project_id: str, req: RepaintRequest, background: BackgroundTasks, request: Request) -> dict:
+    """AI repaint of the poster base. Default mode 'single': one whole-base
+    texture call + frequency-split blend (no seams possible). Mode 'tiled'
+    is the experimental window-by-window engine (see mapgen.v2.repaint)."""
+    _, directory = _load_project(project_id)
+    document = _load_plan(directory)
+    if jobs.is_running(project_id):
+        raise HTTPException(409, "A stage is already running")
+
+    if req.dry_run:
+        if req.mode == "single":
+            return {"stage": "repaint", "state": "dry_run", "mode": "single",
+                    "calls_planned": 1,
+                    "estimated_cost_usd": pipeline.REPAINT_COST_PER_CALL}
+        return {"stage": "repaint", "state": "dry_run", "mode": "tiled",
+                **pipeline.plan_repaint(document, directory, repaint_scale=req.repaint_scale)}
+
+    api_key = request.headers.get("X-Google-API-Key")
+
+    def work() -> None:
+        progress = lambda i, total, detail: jobs.update(  # noqa: E731
+            project_id, "repaint", current=i, total=total, detail=detail
+        )
+        if req.mode == "single":
+            if req.stub:
+                from ...v2.repaint import IdentityTexturePass
+
+                painter = IdentityTexturePass()
+            else:
+                from ...v2.repaint import GeminiTexturePass
+
+                painter = GeminiTexturePass(api_key=api_key)
+            pipeline.texture_poster(
+                document, directory, painter,
+                scale=req.scale, strength=req.strength, progress=progress,
+            )
+            return
+        if req.stub:
+            from ...v2.repaint import IdentityPainter
+
+            painter = IdentityPainter()
+        else:
+            from ...v2.repaint import GeminiPainter
+
+            painter = GeminiPainter(api_key=api_key)
+        _, result = pipeline.repaint_poster(
+            document, directory, painter,
+            scale=req.scale, repaint_scale=req.repaint_scale,
+            max_calls=req.max_calls, progress=progress,
+        )
+        if not result.completed:
+            jobs.update(
+                project_id,
+                "repaint",
+                detail=f"budget reached after {result.calls_made} calls; run again to resume",
+            )
+
+    background.add_task(_run_stage, project_id, "repaint", work)
+    return {"stage": "repaint", "state": "started", "mode": req.mode}
+
+
+@router.get("/{project_id}/repaint/quadrants")
+def repaint_quadrants(project_id: str) -> dict:
+    """Quadrant grid state for the review overlay (empty before first run)."""
+    _, directory = _load_project(project_id)
+    repaint_dir = directory / pipeline.REPAINT_DIRNAME
+    if not (repaint_dir / "repaint.db").exists():
+        return {"grid": None, "quadrants": []}
+    import math
+
+    from ...v2.repaint import RepaintStore
+
+    document = _load_plan(directory)
+    meta = json.loads((repaint_dir / "meta.json").read_text())
+    repaint_scale = meta["repaint_scale"]
+    cols = math.ceil(round(document.canvas.width_px * repaint_scale) / 512)
+    rows = math.ceil(round(document.canvas.height_px * repaint_scale) / 512)
+    store = RepaintStore(repaint_dir)
+    try:
+        cells = [
+            {"x": x, "y": y, "status": status.value}
+            for (x, y), status in sorted(store.status_map().items())
+        ]
+        calls = store.call_count()
+    finally:
+        store.close()
+    return {
+        "grid": {"cols": cols, "rows": rows, "repaint_scale": repaint_scale},
+        "quadrants": cells,
+        "calls_made": calls,
+    }
+
+
+@router.post("/{project_id}/repaint/quadrants/{x}/{y}/flag")
+def flag_quadrant(project_id: str, x: int, y: int, req: FlagRequest) -> dict:
+    """Flag a painted quadrant for redo (next repaint run repaints it with
+    centered context from its painted neighbors), or restore it."""
+    _, directory = _load_project(project_id)
+    repaint_dir = directory / pipeline.REPAINT_DIRNAME
+    if not (repaint_dir / "repaint.db").exists():
+        raise HTTPException(409, "No repaint run yet")
+    from ...v2.repaint import QuadStatus, RepaintStore
+
+    store = RepaintStore(repaint_dir)
+    try:
+        current = store.status_map().get((x, y))
+        if current not in (QuadStatus.GENERATED, QuadStatus.FLAGGED):
+            raise HTTPException(409, f"Quadrant ({x},{y}) is not painted (status: {current})")
+        status = QuadStatus.FLAGGED if req.flagged else QuadStatus.GENERATED
+        store.set_status((x, y), status)
+    finally:
+        store.close()
+    return {"x": x, "y": y, "status": status.value}
 
 
 @router.get("/{project_id}/poster")

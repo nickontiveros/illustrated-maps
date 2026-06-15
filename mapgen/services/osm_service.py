@@ -85,6 +85,50 @@ class OSMService:
         ox.settings.use_cache = cache_dir is not None
         if cache_dir:
             ox.settings.cache_folder = cache_dir
+        # Large regions hammer the default Overpass instance with dozens of
+        # sub-queries and get the client IP rate-limited (connection refused).
+        # MAPGEN_OVERPASS_URL switches to a mirror (e.g.
+        # https://overpass.kumi.systems/api) without code changes.
+        import os
+
+        overpass_url = os.environ.get("MAPGEN_OVERPASS_URL")
+        if overpass_url:
+            ox.settings.overpass_url = overpass_url
+        # Bigger sub-query tiles mean far fewer requests for huge regions
+        # (default 2,500 km^2 splits a state into ~76 queries per layer).
+        max_query_area = os.environ.get("MAPGEN_OSM_MAX_QUERY_AREA_M2")
+        if max_query_area:
+            ox.settings.max_query_area_size = int(float(max_query_area))
+        # Public Overpass refuses state/region-size queries (rate-limit, IP-ban,
+        # whitelist). Point MAPGEN_OSM_PBF at a local Geofabrik .osm.pbf extract
+        # to read those layers offline via GDAL instead -- no network, no limit.
+        self._pbf = None
+        pbf_path = os.environ.get("MAPGEN_OSM_PBF")
+        if pbf_path:
+            from .osm_pbf import PbfBackend
+
+            self._pbf = PbfBackend(pbf_path)
+
+    def _features(self, bbox: BoundingBox, tags: dict) -> Optional[gpd.GeoDataFrame]:
+        """Fetch features by tag, from the local extract if one is configured."""
+        if self._pbf is not None:
+            return self._pbf.features(bbox, tags)
+        return ox.features_from_bbox(bbox=bbox.to_osmnx_bbox(), tags=tags)
+
+    def _road_edges(
+        self, bbox: BoundingBox, highway_types: Optional[list[str]]
+    ) -> Optional[gpd.GeoDataFrame]:
+        """Fetch highway lines as an edges GDF (local extract or osmnx graph).
+
+        ``highway_types=None`` means the full drivable network.
+        """
+        if self._pbf is not None:
+            return self._pbf.road_edges(bbox, highway_types)
+        kwargs = dict(bbox=bbox.to_osmnx_bbox(), network_type="drive", simplify=True)
+        if highway_types is not None:
+            kwargs["custom_filter"] = f'["highway"~"{"|".join(highway_types)}"]'
+        G = ox.graph_from_bbox(**kwargs)
+        return ox.graph_to_gdfs(G, nodes=False, edges=True)
 
     def fetch_region_data(
         self,
@@ -334,15 +378,10 @@ class OSMService:
             GeoDataFrame with road geometries and attributes
         """
         try:
-            # Get road network graph
-            G = ox.graph_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                network_type="drive",
-                simplify=True,
-            )
-
-            # Convert to GeoDataFrame
-            edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
+            # Get road network (full drivable network)
+            edges = self._road_edges(bbox, None)
+            if edges is None or len(edges) == 0:
+                return edges
 
             # Add road classification
             edges["road_class"] = edges["highway"].apply(self._classify_road)
@@ -380,19 +419,9 @@ class OSMService:
                 "secondary_link",
             ]
 
-            # Get road network with custom filter
-            highway_regex = '|'.join(major_highway_types)
-            custom_filter = f'["highway"~"{highway_regex}"]'
-
-            G = ox.graph_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                network_type="drive",
-                simplify=True,
-                custom_filter=custom_filter,
-            )
-
-            # Convert to GeoDataFrame
-            edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
+            edges = self._road_edges(bbox, major_highway_types)
+            if edges is None or len(edges) == 0:
+                return edges
 
             # Add road classification
             edges["road_class"] = edges["highway"].apply(self._classify_road)
@@ -429,17 +458,10 @@ class OSMService:
                 "primary_link",
             ]
 
-            highway_regex = '|'.join(primary_highway_types)
-            custom_filter = f'["highway"~"{highway_regex}"]'
+            edges = self._road_edges(bbox, primary_highway_types)
+            if edges is None or len(edges) == 0:
+                return edges
 
-            G = ox.graph_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                network_type="drive",
-                simplify=True,
-                custom_filter=custom_filter,
-            )
-
-            edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
             edges["road_class"] = edges["highway"].apply(self._classify_road)
 
             # Normalize ref tags for highway shields
@@ -464,17 +486,10 @@ class OSMService:
         """
         try:
             motorway_types = ["motorway", "motorway_link"]
-            highway_regex = '|'.join(motorway_types)
-            custom_filter = f'["highway"~"{highway_regex}"]'
+            edges = self._road_edges(bbox, motorway_types)
+            if edges is None or len(edges) == 0:
+                return edges
 
-            G = ox.graph_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                network_type="drive",
-                simplify=True,
-                custom_filter=custom_filter,
-            )
-
-            edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
             edges["road_class"] = "major"
 
             return edges
@@ -534,10 +549,7 @@ class OSMService:
             GeoDataFrame with building polygons
         """
         try:
-            buildings = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags={"building": True},
-            )
+            buildings = self._features(bbox, {"building": True})
 
             # Filter to polygons only
             buildings = buildings[
@@ -577,10 +589,7 @@ class OSMService:
                 "building": True,
             }
 
-            buildings = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=notable_tags,
-            )
+            buildings = self._features(bbox, notable_tags)
 
             # Filter to polygons only
             buildings = buildings[
@@ -657,10 +666,7 @@ class OSMService:
                 "building": ["cathedral", "church", "mosque", "temple", "stadium"],
             }
 
-            landmarks = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=landmark_tags,
-            )
+            landmarks = self._features(bbox, landmark_tags)
 
             # Filter to polygons and points
             landmarks = landmarks[
@@ -694,10 +700,7 @@ class OSMService:
                 "place": ["city", "town"],
             }
 
-            cities = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=city_tags,
-            )
+            cities = self._features(bbox, city_tags)
 
             if len(cities) > 0:
                 # Filter to only named places
@@ -743,10 +746,7 @@ class OSMService:
                 "landuse": ["reservoir"],
             }
 
-            water = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=water_tags,
-            )
+            water = self._features(bbox, water_tags)
 
             # Classify water type
             water["water_type"] = "water"
@@ -775,10 +775,7 @@ class OSMService:
                 "waterway": ["river"],  # Only rivers, not streams/canals
             }
 
-            water = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=water_tags,
-            )
+            water = self._features(bbox, water_tags)
 
             water["water_type"] = "water"
             if "waterway" in water.columns:
@@ -808,10 +805,7 @@ class OSMService:
                 "waterway": ["river"],
             }
 
-            water = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=water_tags,
-            )
+            water = self._features(bbox, water_tags)
 
             # Filter to only named rivers (major ones have names)
             if "waterway" in water.columns and "name" in water.columns:
@@ -848,10 +842,7 @@ class OSMService:
                 "landuse": ["recreation_ground", "village_green"],
             }
 
-            parks = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=park_tags,
-            )
+            parks = self._features(bbox, park_tags)
 
             # Filter to polygons
             parks = parks[parks.geometry.type.isin(["Polygon", "MultiPolygon"])]
@@ -878,10 +869,7 @@ class OSMService:
                 "boundary": ["national_park", "protected_area"],
             }
 
-            parks = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=park_tags,
-            )
+            parks = self._features(bbox, park_tags)
 
             # Filter to polygons
             parks = parks[parks.geometry.type.isin(["Polygon", "MultiPolygon"])]
@@ -932,10 +920,7 @@ class OSMService:
                 ],
             }
 
-            terrain = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=terrain_tags,
-            )
+            terrain = self._features(bbox, terrain_tags)
 
             # Filter to polygons
             terrain = terrain[terrain.geometry.type.isin(["Polygon", "MultiPolygon"])]
@@ -974,10 +959,7 @@ class OSMService:
             GeoDataFrame with railway geometries
         """
         try:
-            railways = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags={"railway": ["rail", "subway", "light_rail", "tram"]},
-            )
+            railways = self._features(bbox, {"railway": ["rail", "subway", "light_rail", "tram"]})
 
             return railways
 
@@ -1003,17 +985,11 @@ class OSMService:
             wash_tags = {
                 "waterway": ["ditch", "drain", "wadi", "canal"],
             }
-            washes = ox.features_from_bbox(
-                bbox=bbox.to_osmnx_bbox(),
-                tags=wash_tags,
-            )
+            washes = self._features(bbox, wash_tags)
 
             # Also query for intermittent waterways
             try:
-                intermittent = ox.features_from_bbox(
-                    bbox=bbox.to_osmnx_bbox(),
-                    tags={"intermittent": ["yes"]},
-                )
+                intermittent = self._features(bbox, {"intermittent": ["yes"]})
                 if intermittent is not None and len(intermittent) > 0:
                     import pandas as pd
                     washes = pd.concat([washes, intermittent]).drop_duplicates(
@@ -1048,6 +1024,24 @@ class OSMService:
 
         except Exception as e:
             print(f"Warning: Could not extract washes: {e}")
+            return None
+
+    def extract_rivers(self, bbox: BoundingBox) -> Optional[gpd.GeoDataFrame]:
+        """
+        Extract named river/canal centerlines (waterway lines).
+
+        Complements extract_water (polygons) and extract_washes (minor desert
+        waterways): inland rivers are usually mapped as waterway=river lines,
+        which neither of those queries returns.
+        """
+        try:
+            rivers = self._features(bbox, {"waterway": ["river", "canal"]})
+            if rivers is None or len(rivers) == 0:
+                return None
+            rivers = rivers[rivers.geometry.type.isin(["LineString", "MultiLineString"])]
+            return rivers if len(rivers) > 0 else None
+        except Exception as e:
+            print(f"Warning: Could not extract rivers: {e}")
             return None
 
     def get_city_boundary(self, city_name: str) -> Optional[Polygon]:

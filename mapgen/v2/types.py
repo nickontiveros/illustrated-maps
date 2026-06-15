@@ -37,6 +37,24 @@ class RegionBBox(BaseModel):
     def height_deg(self) -> float:
         return self.north - self.south
 
+    @property
+    def mid_latitude(self) -> float:
+        return (self.north + self.south) / 2.0
+
+    @property
+    def width_km(self) -> float:
+        import math
+
+        return abs(self.width_deg) * 111.32 * math.cos(math.radians(self.mid_latitude))
+
+    @property
+    def height_km(self) -> float:
+        return abs(self.height_deg) * 110.57
+
+    @property
+    def area_km2(self) -> float:
+        return self.width_km * self.height_km
+
 
 class CanvasSpec(BaseModel):
     """Output poster dimensions."""
@@ -96,6 +114,7 @@ class RoadPath(BaseModel):
     width_px: float
     name: Optional[str] = None
     depth: float = 0.0
+    ref: Optional[str] = None  # route designation for shields, e.g. "I 10"
 
 
 class BuildingFootprint(BaseModel):
@@ -117,12 +136,25 @@ class PoiSlot(BaseModel):
     asset_id: str = ""
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # What the landmark physically is (building, campus, park, garden,
+    # mountain, monument, airport, stadium, area, ...). Drives the sprite
+    # prompt; "river" POIs never become slots at all (see PlanBuilder).
+    feature_type: str = "building"
+    # When a POI sits within a neighbour's sprite footprint, no smooth warp can
+    # separate them, so the sprite is offset into open space and a connector is
+    # drawn back to the true ground point. ``anchor`` always stays the sprite
+    # base; ``leader_anchor`` (when ``offset``) is that true warped point.
+    leader_anchor: Optional[Point] = None
+    offset: bool = False
 
 
 class ScatterKind(str, Enum):
     TREE = "tree"
     HOUSE = "house"
     BOAT = "boat"
+    CACTUS = "cactus"
+    SHRUB = "shrub"
+    ROCK = "rock"
 
 
 class ScatterSlot(BaseModel):
@@ -135,6 +167,7 @@ class ScatterSlot(BaseModel):
 
 
 class LabelKind(str, Enum):
+    SHIELD = "shield"
     STREET = "street"
     DISTRICT = "district"
     POI = "poi"
@@ -171,9 +204,18 @@ class AssetSpec(BaseModel):
     sheet_grid: Optional[tuple[int, int]] = None  # (cols, rows) for sprite sheets
 
     def content_hash(self) -> str:
-        """Stable hash for asset caching."""
+        """Stable hash for asset caching.
+
+        Includes the reference photo's *content* when it exists -- swapping
+        the image behind an unchanged path must invalidate the cache."""
         payload = self.model_dump_json(exclude_none=True)
-        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+        digest = hashlib.sha256(payload.encode())
+        if self.source_photo:
+            try:
+                digest.update(Path(self.source_photo).read_bytes())
+            except OSError:
+                pass
+        return digest.hexdigest()[:16]
 
 
 class StyleSpec(BaseModel):
@@ -211,6 +253,23 @@ class StyleSpec(BaseModel):
     paper_grain: float = 0.05  # 0..1 strength of paper texture overlay
     harmonize_strength: float = 0.5  # low-frequency AI mood blend (0 = off)
 
+    # --- scene vocabulary (region character, not just colors) ---
+    # What the style-bible swatch should depict. Keep it generic by default;
+    # presets override it with regional scenery (no hard-coded coastlines).
+    scene: str = "a road, a few local buildings, native trees and the region's typical terrain"
+    # Scatter kinds sprinkled on bare base land (deserts get cacti, not
+    # nothing). Values must be ScatterKind names.
+    land_scatter: list[str] = Field(default_factory=list)
+    # Scatter kind for open water; None disables (no sailboats on a desert
+    # reservoir).
+    water_scatter: Optional[str] = "boat"
+    # Per-ground-class texture prompt overrides (e.g. WATER on a desert map
+    # is a river, not "calm sea water").
+    texture_hints: dict[str, str] = Field(default_factory=dict)
+    # Per-scatter-kind sprite prompt overrides (e.g. TREE on a desert map is a
+    # palo verde, not a lush park tree). Keyed by ScatterKind value.
+    sprite_hints: dict[str, str] = Field(default_factory=dict)
+
 
 class PlanDocument(BaseModel):
     """Complete scene graph for one poster, in poster pixel space."""
@@ -229,6 +288,17 @@ class PlanDocument(BaseModel):
     scatter: list[ScatterSlot] = Field(default_factory=list)
     labels: list[LabelSpec] = Field(default_factory=list)
     manifest: list[AssetSpec] = Field(default_factory=list)
+
+    # Source-data provenance (detail tier, per-layer outcomes) and
+    # human-readable warnings -- a layer that failed to fetch must be
+    # visible here, never silently absent from the poster.
+    provenance: dict = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+    # GeoFrame parameters (rotation, aspect extension) used to map geo
+    # coordinates into this plan -- consumers adding geo features later must
+    # reconstruct the same frame (ingest.GeoFrame.from_dict).
+    frame: dict = Field(default_factory=dict)
 
     def save(self, path: Path | str) -> None:
         Path(path).write_text(self.model_dump_json(indent=1))

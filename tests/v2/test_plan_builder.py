@@ -80,6 +80,37 @@ def test_svg_preview(plan: PlanDocument):
     assert svg.count("<path") >= len(plan.roads)
 
 
+def test_leader_lines_render_and_roundtrip(source, small_canvas, tmp_path):
+    from mapgen.v2.ingest import SourceData, SourcePoi
+
+    region = source.region
+    midlat = (region.north + region.south) / 2
+    midlon = (region.east + region.west) / 2
+    pois = [
+        SourcePoi(id="x", name="X", latitude=midlat, longitude=midlon, tier=2),
+        # ~3 m away: no warp can separate them, must be leadered.
+        SourcePoi(id="y", name="Y", latitude=midlat + 0.00003, longitude=midlon + 0.00001, tier=2),
+        SourcePoi(
+            id="z",
+            name="Z",
+            latitude=region.south + 0.25 * (region.north - region.south),
+            longitude=region.west + 0.25 * (region.east - region.west),
+            tier=2,
+        ),
+    ]
+    plan = PlanBuilder(canvas=small_canvas).build(SourceData(region=region, pois=pois), title="T")
+    offset = [s for s in plan.pois if s.offset]
+    assert offset and all(s.leader_anchor is not None for s in offset)
+    # Non-coincident slots carry no leader.
+    assert all(s.leader_anchor is None for s in plan.pois if not s.offset)
+    svg = plan_to_svg(plan)
+    assert "<line" in svg and "<circle" in svg
+    # New PoiSlot fields survive a save/load round-trip.
+    path = tmp_path / "plan.json"
+    plan.save(path)
+    assert PlanDocument.load(path) == plan
+
+
 def test_zero_distortion_keeps_relative_positions(source, small_canvas):
     flat = PlanBuilder(canvas=small_canvas, distortion_strength=0.0,
                        camera=CameraSpec(convergence=1.0, vertical_scale=1.0, horizon_margin=0.0))

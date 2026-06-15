@@ -81,16 +81,23 @@ class Compositor:
     # -- main entry ----------------------------------------------------------
 
     def render(self, scale: float = 1.0) -> Image.Image:
+        return self.apply_finish(self.render_base(scale), scale)
+
+    def render_base(self, scale: float = 1.0) -> Image.Image:
+        """Everything below the labels: the repaintable map surface.
+
+        Split from `apply_finish` so a tiled AI repaint can transform the
+        painted ground/fabric while labels, frame, and grain are composited
+        afterwards at native resolution (they must never be repainted).
+        """
         plan = self.plan
         width = max(1, int(round(plan.canvas.width_px * scale)))
         height = max(1, int(round(plan.canvas.height_px * scale)))
-        wobble = plan.style.wobble_px * max(0.35, scale)
+        wobble = self._wobble_amp(scale)
 
         canvas = Image.new("RGBA", (width, height), self.palette["paper"] + (255,))
         logger.info("Compositing %dx%d (scale %.2f)", width, height, scale)
-        # Wobble wavelength tracks the poster, not absolute pixels, so a
-        # preview render and the full-res render crinkle identically.
-        self._wavelength = max(20.0, plan.canvas.width_px * 0.012 * scale)
+        self._set_wavelength(scale)
 
         self._draw_base_land(canvas, scale)
         self._draw_ground(canvas, scale, wobble)
@@ -100,10 +107,81 @@ class Compositor:
         self._draw_scatter(canvas, scale)
         self._draw_pois(canvas, scale)
         self._draw_atmosphere(canvas, scale)
+        return canvas
+
+    def apply_finish(self, canvas: Image.Image, scale: float = 1.0) -> Image.Image:
+        """Labels, frame/ornaments, and paper grain over a rendered base.
+
+        `scale` must describe the canvas (labels and frame metrics derive
+        from it), not the scale the base happened to be rendered at -- the
+        repaint path renders the base at 0.5 and finishes at 1.0 after
+        upscaling.
+        """
+        canvas = canvas.convert("RGBA")
+        self._set_wavelength(scale)
         self._draw_labels(canvas, scale)
         self._draw_frame(canvas, scale)
         self._apply_grain(canvas)
         return canvas.convert("RGB")
+
+    def render_class_mask(self, classes: set[GroundClass], scale: float = 1.0) -> Image.Image:
+        """Mode-"L" mask (255 = inside) of where the given ground classes are
+        visible, replaying the ground draw order with the same wobble seeds
+        as `render_base` so mask and render agree pixel-for-pixel.
+
+        Later polygons erase earlier ones exactly as they occlude them in
+        the render. For WATER the waterway strokes are included; roads drawn
+        over water (bridges) are not subtracted -- callers using the mask for
+        statistics tolerate that sliver.
+        """
+        width = max(1, int(round(self.plan.canvas.width_px * scale)))
+        height = max(1, int(round(self.plan.canvas.height_px * scale)))
+        wobble = self._wobble_amp(scale)
+        self._set_wavelength(scale)
+
+        mask = Image.new("L", (width, height), 0)
+        mdraw = ImageDraw.Draw(mask)
+        for poly, ring, holes in self._ground_rings(scale, wobble):
+            if len(ring) < 3:
+                continue
+            mdraw.polygon(ring, fill=255 if poly.cls in classes else 0)
+            for hole in holes:
+                if len(hole) >= 3:
+                    mdraw.polygon(hole, fill=0)
+        if GroundClass.WATER in classes:
+            for i, road in enumerate(r for r in self.plan.roads if r.cls in WATERWAY_CLASSES):
+                pts = wobble_polyline(
+                    self._scaled(road.points, scale), wobble * 1.5, self._wavelength * 1.5, seed=i * 7.7
+                )
+                w = max(2, int(road.width_px * scale)) + max(2, int(4 * scale))
+                mdraw.line(pts, fill=255, width=w, joint="curve")
+                r_cap = w / 2
+                for p in (pts[0], pts[-1]):
+                    mdraw.ellipse([p[0] - r_cap, p[1] - r_cap, p[0] + r_cap, p[1] + r_cap], fill=255)
+        return mask
+
+    def _wobble_amp(self, scale: float) -> float:
+        return self.plan.style.wobble_px * max(0.35, scale)
+
+    def _set_wavelength(self, scale: float) -> None:
+        # Wobble wavelength tracks the poster, not absolute pixels, so a
+        # preview render and the full-res render crinkle identically.
+        self._wavelength = max(20.0, self.plan.canvas.width_px * 0.012 * scale)
+
+    def _ground_rings(self, scale: float, wobble: float):
+        """Yield (polygon, wobbled exterior ring, wobbled hole rings) in draw
+        order. Single source of the ring geometry so `_draw_ground` and
+        `render_class_mask` can never diverge."""
+        ordered = sorted(self.plan.ground, key=lambda g: g.cls != GroundClass.WATER)
+        for idx, poly in enumerate(ordered):
+            ring = wobble_ring(
+                self._scaled(poly.exterior, scale), wobble * 2, self._wavelength * 2, seed=idx * 3.1
+            )
+            holes = [
+                wobble_ring(self._scaled(h, scale), wobble * 2, self._wavelength * 2, seed=idx * 3.1 + 1)
+                for h in poly.holes
+            ]
+            yield poly, ring, holes
 
     # -- layers --------------------------------------------------------------
 
@@ -131,68 +209,120 @@ class Compositor:
             layer.paste(self._tile_texture(texture, canvas.size, scale), (0, 0), mask)
         canvas.alpha_composite(layer)
 
-    def _tile_texture(self, texture: Image.Image, size: tuple[int, int], scale: float) -> Image.Image:
-        """Fill the canvas with a texture without readable repetition.
+    def _tile_texture(
+        self,
+        texture: Image.Image,
+        size: tuple[int, int],
+        scale: float,
+        offset: tuple[int, int] = (0, 0),
+        canvas_size: tuple[int, int] | None = None,
+    ) -> Image.Image:
+        """Fill a region with a texture without readable repetition.
 
         Even a perfectly seamless tile repeats its features at the tile
         period, which the eye picks up as a grid. Two countermeasures:
         the texture is laid down at two incommensurate periods (golden
         ratio apart) and blended, and a canvas-wide low-frequency tone
         field modulates the result so no period survives intact.
+
+        ``offset`` is the region's position on the canvas: tiling and the
+        tone field are anchored to canvas coordinates, so patches rendered
+        separately (per-polygon bounding boxes) line up seamlessly.
         """
         tile_size = max(64, int(texture.width * max(0.25, scale)))
-        base = self._tile_plain(texture, size, tile_size)
-        overlay = self._tile_plain(texture, size, max(64, int(tile_size * 1.618)))
+        base = self._tile_plain(texture, size, tile_size, offset)
+        overlay = self._tile_plain(texture, size, max(64, int(tile_size * 1.618)), offset)
         out = Image.blend(base, overlay, 0.4)
-        return self._tone_variation(out)
+        return self._tone_variation(out, offset, canvas_size or size)
 
-    def _tile_plain(self, texture: Image.Image, size: tuple[int, int], tile_size: int) -> Image.Image:
+    def _tile_plain(
+        self,
+        texture: Image.Image,
+        size: tuple[int, int],
+        tile_size: int,
+        offset: tuple[int, int] = (0, 0),
+    ) -> Image.Image:
         tile = texture.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
         out = Image.new("RGB", size)
-        for y in range(0, size[1], tile_size):
-            for x in range(0, size[0], tile_size):
+        start_x = -(offset[0] % tile_size)
+        start_y = -(offset[1] % tile_size)
+        for y in range(start_y, size[1], tile_size):
+            for x in range(start_x, size[0], tile_size):
                 out.paste(tile, (x, y))
         return out
 
-    def _tone_variation(self, img: Image.Image, amount: float = 0.045) -> Image.Image:
-        """Seeded large-scale luminance variation, like uneven washes."""
-        rng = np.random.default_rng(11)
-        coarse = rng.uniform(0.0, 255.0, (9, 7)).astype(np.float32)
-        field = Image.fromarray(coarse.astype(np.uint8), "L").resize(
-            img.size, Image.Resampling.BICUBIC
+    def _tone_field(self, canvas_size: tuple[int, int]) -> Image.Image:
+        """Canvas-wide seeded luminance field (L mode), cached per size."""
+        cached = getattr(self, "_tone_field_cache", None)
+        if cached is None or cached[0] != canvas_size:
+            rng = np.random.default_rng(11)
+            coarse = rng.uniform(0.0, 255.0, (9, 7)).astype(np.uint8)
+            field = Image.fromarray(coarse, "L").resize(canvas_size, Image.Resampling.BICUBIC)
+            self._tone_field_cache = (canvas_size, field)
+        return self._tone_field_cache[1]
+
+    def _tone_variation(
+        self,
+        img: Image.Image,
+        offset: tuple[int, int],
+        canvas_size: tuple[int, int],
+        amount: float = 0.045,
+    ) -> Image.Image:
+        """Seeded large-scale luminance variation, like uneven washes.
+
+        Processed in row stripes: a full-poster float32 copy is ~840 MB and
+        rapid allocations that size can OOM a WSL VM."""
+        field = self._tone_field(canvas_size).crop(
+            (offset[0], offset[1], offset[0] + img.width, offset[1] + img.height)
         )
-        factor = 1.0 + amount * (np.asarray(field, dtype=np.float32) / 127.5 - 1.0)
-        arr = np.asarray(img, dtype=np.float32) * factor[..., None]
-        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
+        out = np.asarray(img.convert("RGB")).copy()
+        field_arr = np.asarray(field)
+        stripe = 1024
+        for y in range(0, out.shape[0], stripe):
+            sl = slice(y, min(y + stripe, out.shape[0]))
+            factor = 1.0 + amount * (field_arr[sl].astype(np.float32) / 127.5 - 1.0)
+            block = out[sl].astype(np.float32) * factor[..., None]
+            out[sl] = np.clip(block, 0, 255).astype(np.uint8)
+        return Image.fromarray(out, "RGB")
 
     def _scaled(self, points: list[Point], scale: float) -> list[Point]:
         return [(x * scale, y * scale) for x, y in points]
 
     def _draw_ground(self, canvas: Image.Image, scale: float, wobble: float) -> None:
-        plan = self.plan
-        # Water first, then vegetation/land classes on top.
-        ordered = sorted(plan.ground, key=lambda g: g.cls != GroundClass.WATER)
-        for idx, poly in enumerate(ordered):
-            ring = wobble_ring(self._scaled(poly.exterior, scale), wobble * 2, self._wavelength * 2, seed=idx * 3.1)
+        # Water first, then vegetation/land classes on top (see _ground_rings).
+        # All mask/texture work happens on the polygon's bounding box, not the
+        # full canvas: a state-scale plan has hundreds of ground polygons, and
+        # full-canvas layers per polygon (~1.7 GB transient each at print
+        # size) OOM-kill a WSL VM long before they finish.
+        for poly, ring, holes in self._ground_rings(scale, wobble):
             if len(ring) < 3:
                 continue
-            mask = Image.new("L", canvas.size, 0)
+            pad = 4
+            x0 = max(0, int(min(p[0] for p in ring)) - pad)
+            y0 = max(0, int(min(p[1] for p in ring)) - pad)
+            x1 = min(canvas.width, int(max(p[0] for p in ring)) + pad)
+            y1 = min(canvas.height, int(max(p[1] for p in ring)) + pad)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            box_size = (x1 - x0, y1 - y0)
+            local_ring = [(x - x0, y - y0) for x, y in ring]
+
+            mask = Image.new("L", box_size, 0)
             mdraw = ImageDraw.Draw(mask)
-            mdraw.polygon(ring, fill=255)
-            for hole in poly.holes:
-                hole_ring = wobble_ring(self._scaled(hole, scale), wobble * 2, self._wavelength * 2, seed=idx * 3.1 + 1)
+            mdraw.polygon(local_ring, fill=255)
+            for hole_ring in holes:
                 if len(hole_ring) >= 3:
-                    mdraw.polygon(hole_ring, fill=0)
+                    mdraw.polygon([(x - x0, y - y0) for x, y in hole_ring], fill=0)
 
             texture = self._texture(poly.cls)
             fill_color = self.palette.get(poly.cls.value, self.palette["land"])
-            layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
             if texture is not None:
-                layer.paste(self._tile_texture(texture, canvas.size, scale), (0, 0), mask)
+                patch = self._tile_texture(
+                    texture, box_size, scale, offset=(x0, y0), canvas_size=canvas.size
+                )
             else:
-                solid = Image.new("RGBA", canvas.size, fill_color + (255,))
-                layer.paste(solid, (0, 0), mask)
-            canvas.alpha_composite(layer)
+                patch = Image.new("RGB", box_size, fill_color)
+            canvas.paste(patch, (x0, y0), mask)
 
             # Painterly edge: darkened wobbly outline, heavier for water.
             # Urban/land fills are subtle tone shifts, not washes -- no edge.
@@ -292,7 +422,14 @@ class Compositor:
             if not sprites:
                 continue
             sprite = sprites[slot.variant % len(sprites)]
-            target_w = max(4, int(slot.width_px * scale))
+            # Per-instance variation, deterministic from position, so the same
+            # handful of sheet variants don't read as obvious tiling: mirror
+            # half of them and nudge each one's size.
+            h = (int(slot.x * 13.7) ^ int(slot.y * 7.3)) & 0xFFFF
+            if h & 1:
+                sprite = sprite.transpose(Image.FLIP_LEFT_RIGHT)
+            jitter = 0.78 + (h >> 1 & 0xFF) / 255.0 * 0.5  # 0.78..1.28
+            target_w = max(4, int(slot.width_px * scale * jitter))
             target_h = max(4, int(sprite.height * target_w / max(1, sprite.width)))
             resized = sprite.resize((target_w, target_h), Image.Resampling.LANCZOS)
             x = int(slot.x * scale - target_w / 2)
@@ -301,6 +438,21 @@ class Compositor:
 
     def _draw_pois(self, canvas: Image.Image, scale: float) -> None:
         shadow_rgb = self.palette["shadow"]
+        # Leader lines first, as a pre-pass, so every sprite paints on top of
+        # every connector (a connector must never cover a neighbour's sprite).
+        outline_rgb = self.palette["outline"]
+        leader = ImageDraw.Draw(canvas, "RGBA")
+        lw = max(1, int(self.plan.canvas.width_px * scale * 0.0012))
+        dot_r = max(2, int(self.plan.canvas.width_px * scale * 0.0035))
+        for slot in self.plan.pois:
+            if not (slot.offset and slot.leader_anchor is not None):
+                continue
+            x0, y0 = slot.anchor[0] * scale, slot.anchor[1] * scale
+            x1, y1 = slot.leader_anchor[0] * scale, slot.leader_anchor[1] * scale
+            leader.line([(x0, y0), (x1, y1)], fill=outline_rgb + (200,), width=lw)
+            leader.ellipse(
+                [x1 - dot_r, y1 - dot_r, x1 + dot_r, y1 + dot_r], fill=outline_rgb + (255,)
+            )
         for slot in sorted(self.plan.pois, key=lambda s: s.anchor[1]):
             sprite = self._asset(slot.asset_id)
             w = max(8, int(slot.width_px * scale))
@@ -315,15 +467,40 @@ class Compositor:
                                        fill=self.palette["building_wall"] + (130,),
                                        outline=self.palette["outline"] + (255,), width=max(1, int(3 * scale)))
                 continue
-            sprite = sprite.convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-            # Soft drop shadow from the sprite's alpha, offset to the SE.
-            alpha = sprite.getchannel("A").point(lambda a: int(a * 0.45))
-            shadow = Image.new("RGBA", sprite.size, shadow_rgb + (0,))
-            shadow.putalpha(alpha)
-            shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, int(w * 0.015))))
-            offset = max(2, int(w * 0.03))
-            canvas.alpha_composite(shadow, (x + offset, y + offset))
-            canvas.alpha_composite(sprite, (x, y))
+            # Fit inside the slot box preserving the sprite's own aspect
+            # (anchored bottom-center) -- the slot is a layout budget, not a
+            # target shape to squash into.
+            fit = min(w / sprite.width, h / sprite.height)
+            fw, fh = max(1, round(sprite.width * fit)), max(1, round(sprite.height * fit))
+            sprite = sprite.convert("RGBA").resize((fw, fh), Image.Resampling.LANCZOS)
+            x += (w - fw) // 2
+            y += h - fh
+            w, h = fw, fh
+            # Lift the landmark off the busy ground: a soft paper-toned halo
+            # behind it (separation), then a firm dark drop shadow to the SE.
+            pad = max(4, int(w * 0.10))
+            big = Image.new("RGBA", (fw + 2 * pad, fh + 2 * pad), (0, 0, 0, 0))
+            base_alpha = sprite.getchannel("A")
+
+            halo_a = Image.new("L", big.size, 0)
+            halo_a.paste(base_alpha, (pad, pad))
+            halo_a = halo_a.filter(ImageFilter.GaussianBlur(max(2, int(pad * 0.7))))
+            halo_a = halo_a.point(lambda a: min(255, int(a * 1.7)))
+            halo = Image.new("RGBA", big.size, self.palette["paper"] + (0,))
+            halo.putalpha(halo_a)
+            big.alpha_composite(halo)
+
+            dark = tuple(int(c * 0.55) for c in shadow_rgb)
+            shadow_a = Image.new("L", big.size, 0)
+            shadow_a.paste(base_alpha.point(lambda a: int(a * 0.62)), (pad, pad))
+            shadow_a = shadow_a.filter(ImageFilter.GaussianBlur(max(1, int(w * 0.02))))
+            shadow = Image.new("RGBA", big.size, dark + (0,))
+            shadow.putalpha(shadow_a)
+            offset = max(3, int(w * 0.05))
+            big.alpha_composite(shadow, (offset, offset))
+
+            big.alpha_composite(sprite, (pad, pad))
+            canvas.alpha_composite(big, (x - pad, y - pad))
 
     def _draw_atmosphere(self, canvas: Image.Image, scale: float) -> None:
         """Distance haze: lighten and desaturate toward the horizon."""
@@ -355,15 +532,97 @@ class Compositor:
             if label.kind == LabelKind.TITLE:
                 self._draw_title(canvas, label.text, baseline[0], size, scale)
                 continue
+            if label.kind == LabelKind.SHIELD:
+                self._draw_shield(canvas, label.text, baseline[0], size)
+                continue
+            if label.kind == LabelKind.POI:
+                # Landmark names must stay readable on busy painted ground:
+                # set them on a small paper plate (mini-cartouche).
+                self._draw_label_plate(canvas, label.text, baseline[0], font, size)
             fill = self.palette["water_edge"] if label.kind == LabelKind.WATER else label_rgb
             draw_text_on_path(canvas, label.text, baseline, font, fill, halo=halo)
+
+    def _draw_label_plate(
+        self,
+        canvas: Image.Image,
+        text: str,
+        center: Point,
+        font,
+        size: int,
+    ) -> None:
+        try:
+            text_w = font.getlength(text)
+        except AttributeError:
+            text_w = font.getbbox(text)[2]
+        pad_x = size * 0.55
+        pad_y = size * 0.30
+        try:
+            ascent, descent = font.getmetrics()
+            text_h = ascent + descent
+        except AttributeError:
+            text_h = size * 1.3
+        x0 = center[0] - text_w / 2 - pad_x
+        x1 = center[0] + text_w / 2 + pad_x
+        y0 = center[1] - text_h / 2 - pad_y
+        y1 = center[1] + text_h / 2 + pad_y
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        radius = max(3, int((y1 - y0) * 0.38))
+        draw.rounded_rectangle(
+            [x0, y0, x1, y1],
+            radius=radius,
+            fill=self.palette["paper"] + (225,),
+            outline=self.palette["outline"] + (255,),
+            width=max(1, int(size * 0.07)),
+        )
+
+    def _draw_shield(self, canvas: Image.Image, text: str, center: Point, size: int) -> None:
+        """A route badge: navy for interstates, cream for US/state routes."""
+        font = load_font(int(size * 1.05), self.font_path, bold=True)
+        t = text.upper()
+        first = t.split()[0] if t.split() else ""
+        if first == "I" or (first.startswith("I") and first[1:].isdigit()):
+            bg, fg, border = (32, 46, 92), (245, 245, 248), (245, 245, 248)
+        elif first == "US":
+            bg, fg, border = (248, 245, 238), (35, 35, 35), (35, 35, 35)
+        else:  # state and everything else
+            bg, fg, border = (248, 245, 238), (120, 32, 32), (120, 32, 32)
+        try:
+            text_w = font.getlength(text)
+            ascent, descent = font.getmetrics()
+            text_h = ascent + descent
+        except AttributeError:
+            text_w, text_h = len(text) * size * 0.6, size * 1.3
+        pad = size * 0.45
+        cx, cy = center
+        x0, y0 = cx - text_w / 2 - pad, cy - text_h / 2 - pad * 0.5
+        x1, y1 = cx + text_w / 2 + pad, cy + text_h / 2 + pad * 0.5
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        draw.rounded_rectangle(
+            [x0, y0, x1, y1],
+            radius=max(2, int(size * 0.22)),
+            fill=bg + (255,),
+            outline=border + (255,),
+            width=max(2, int(size * 0.12)),
+        )
+        draw.text((cx, cy), text, font=font, fill=fg + (255,), anchor="mm")
 
     def _draw_title(self, canvas: Image.Image, text: str, center: Point, size: int, scale: float) -> None:
         cartouche = self._asset("ornament_cartouche")
         font = load_font(size, self.font_path, bold=True)
         if cartouche is not None:
-            cw = int(size * max(6, len(text) * 0.75))
+            # Size the frame around the lettering, not the other way round:
+            # the ornament needs clear margin beyond the text on both sides.
+            try:
+                text_w = font.getlength(text)
+            except AttributeError:
+                text_w = len(text) * size * 0.62
+            cw = int(max(text_w * 1.7, size * 7))
             ch = int(cw * cartouche.height / max(1, cartouche.width))
+            # A title cartouche is a banner, not a centerpiece: cap its
+            # height and accept stretching the ornament when the generated
+            # asset came back squarer than requested.
+            max_ch = int(canvas.height * 0.11)
+            ch = min(ch, max_ch)
             cartouche = cartouche.convert("RGBA").resize((cw, ch), Image.Resampling.LANCZOS)
             # Clamp fully on-canvas (the title anchor can sit near the top
             # edge, which would clip the ornament), then center the
@@ -398,9 +657,15 @@ class Compositor:
         strength = self.plan.style.paper_grain
         if strength <= 0:
             return
+        # Striped: full-poster float32 noise + image copies peak at multiple
+        # GB and can OOM a memory-capped WSL VM.
         rng = np.random.default_rng(42)
-        noise = rng.normal(0.0, 1.0, (canvas.height, canvas.width, 1)).astype(np.float32)
-        arr = np.asarray(canvas.convert("RGB"), dtype=np.float32)
-        out = np.clip(arr * (1.0 + strength * 0.35 * noise), 0, 255).astype(np.uint8)
+        out = np.asarray(canvas.convert("RGB")).copy()
+        stripe = 1024
+        for y in range(0, out.shape[0], stripe):
+            sl = slice(y, min(y + stripe, out.shape[0]))
+            noise = rng.normal(0.0, 1.0, (out[sl].shape[0], out.shape[1], 1)).astype(np.float32)
+            block = out[sl].astype(np.float32) * (1.0 + strength * 0.35 * noise)
+            out[sl] = np.clip(block, 0, 255).astype(np.uint8)
         grained = Image.fromarray(out, "RGB").convert("RGBA")
         canvas.paste(grained)

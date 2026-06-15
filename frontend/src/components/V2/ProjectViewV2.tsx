@@ -1,9 +1,16 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { v2api, type V2JobState, type V2Poi, type V2ProjectDetail } from '@/api/v2';
+import {
+  v2api,
+  type V2JobState,
+  type V2Poi,
+  type V2ProjectDetail,
+  type V2RepaintDryRun,
+} from '@/api/v2';
 
-/** V2 workflow: Plan (free) -> Assets (AI, cached) -> Compose (deterministic). */
+/** V2 workflow: Plan (free) -> Assets (AI, cached) -> Compose (deterministic)
+ * -> optional Repaint (tiled AI texture pass). */
 function ProjectViewV2() {
   const { id = '' } = useParams();
   const queryClient = useQueryClient();
@@ -39,6 +46,14 @@ function ProjectViewV2() {
   };
 
   const startPlan = useMutation({ mutationFn: () => v2api.startPlan(id), onSettled: refresh });
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const retitle = useMutation({
+    mutationFn: (title: string) => v2api.retitle(id, title),
+    onSettled: () => {
+      setTitleDraft(null);
+      refresh();
+    },
+  });
   const startAssets = useMutation({
     mutationFn: (only_ids?: string[]) => v2api.startAssets(id, { stub: useStub, only_ids, force: !!only_ids }),
     onSettled: refresh,
@@ -48,11 +63,28 @@ function ProjectViewV2() {
     onSettled: refresh,
   });
 
+  const [dryRun, setDryRun] = useState<V2RepaintDryRun | null>(null);
+  const planRepaint = useMutation({
+    mutationFn: () => v2api.startRepaint(id, { dry_run: true }),
+    onSuccess: (data) => setDryRun(data as V2RepaintDryRun),
+  });
+  const startRepaint = useMutation({
+    mutationFn: () => v2api.startRepaint(id, { scale, stub: useStub }),
+    onSettled: refresh,
+  });
+
   const { data: assets } = useQuery({
     queryKey: ['v2-assets', id],
     queryFn: () => v2api.listAssets(id),
     enabled: !!id && !!project?.has_plan,
   });
+
+  const flagAsset = useMutation({
+    mutationFn: ({ assetId, flagged }: { assetId: string; flagged: boolean }) =>
+      v2api.flagAsset(id, assetId, flagged),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['v2-assets', id] }),
+  });
+  const flaggedIds = (assets ?? []).filter((a) => a.flagged).map((a) => a.id);
 
   if (!project) return <div className="p-8 text-slate-500">Loading…</div>;
 
@@ -63,7 +95,52 @@ function ProjectViewV2() {
           <Link to="/v2" className="text-sm text-slate-500 hover:text-slate-800">
             &larr; V2 maps
           </Link>
-          <h1 className="text-2xl font-bold text-slate-800">{project.name}</h1>
+          {titleDraft === null ? (
+            <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+              {project.config.title || project.name}
+              <button
+                title="Edit the poster title (no re-plan needed)"
+                onClick={() => setTitleDraft(project.config.title || project.name)}
+                className="text-slate-400 hover:text-slate-700 text-base"
+              >
+                ✎
+              </button>
+            </h1>
+          ) : (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (titleDraft.trim()) retitle.mutate(titleDraft.trim());
+              }}
+            >
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                className="text-2xl font-bold text-slate-800 border-b-2 border-indigo-400 bg-transparent focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!titleDraft.trim() || retitle.isPending}
+                className="px-2 py-1 bg-indigo-600 text-white text-sm rounded-lg disabled:opacity-50"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => setTitleDraft(null)}
+                className="px-2 py-1 text-sm text-slate-500"
+              >
+                Cancel
+              </button>
+            </form>
+          )}
+          {retitle.data?.plan_patched && (
+            <p className="text-xs text-amber-600">
+              Title updated in the plan — re-run Compose to see it on the poster.
+            </p>
+          )}
           <p className="text-sm text-slate-500">
             {project.poi_count} POIs · {project.config.output?.width_px}×
             {project.config.output?.height_px}px @ {project.config.output?.dpi} DPI
@@ -71,7 +148,7 @@ function ProjectViewV2() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3 mb-8">
+      <div className="grid gap-4 lg:grid-cols-4 mb-8">
         {/* Stage 1: Plan */}
         <StageCard
           title="1 · Plan"
@@ -150,9 +227,42 @@ function ProjectViewV2() {
             </div>
           }
         />
+
+        {/* Stage 4: Repaint (optional) */}
+        <StageCard
+          title="4 · Repaint"
+          subtitle="Hand-painted texture pass (1 AI call) — optional"
+          note={
+            dryRun
+              ? `${dryRun.calls_planned} calls planned (~$${dryRun.estimated_cost_usd})`
+              : undefined
+          }
+          job={status?.repaint}
+          action={
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => planRepaint.mutate()}
+                disabled={anyRunning || !project.has_plan}
+                className="px-2 py-1.5 text-xs text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50 disabled:opacity-50"
+                title="Plan only: shows call count and cost, spends nothing"
+              >
+                Dry run
+              </button>
+              <button
+                onClick={() => startRepaint.mutate()}
+                disabled={anyRunning || !project.has_plan}
+                className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Repaint
+              </button>
+            </div>
+          }
+        />
       </div>
 
       <PoiEditor project={project} disabled={!!anyRunning} onSaved={refresh} />
+
+      <RepaintQuadrants projectId={id} disabled={!!anyRunning} repaintJob={status?.repaint} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Plan preview */}
@@ -189,14 +299,31 @@ function ProjectViewV2() {
       {/* Asset gallery */}
       {assets && assets.length > 0 && (
         <section className="mt-8">
-          <h2 className="font-semibold text-slate-700 mb-3">
-            Assets ({assets.filter((a) => a.cached).length}/{assets.length} generated)
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-slate-700">
+              Assets ({assets.filter((a) => a.cached).length}/{assets.length} generated)
+            </h2>
+            {flaggedIds.length > 0 && (
+              <button
+                onClick={() => startAssets.mutate(flaggedIds)}
+                disabled={anyRunning}
+                className="px-3 py-1.5 bg-amber-600 text-white text-xs rounded-lg hover:bg-amber-700 disabled:opacity-50"
+              >
+                Regenerate flagged ({flaggedIds.length})
+              </button>
+            )}
+          </div>
           <div className="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-6">
             {assets.map((asset) => (
               <div
                 key={asset.id}
-                className="bg-white rounded-lg border border-slate-200 p-2 flex flex-col"
+                className={`bg-white rounded-lg border p-2 flex flex-col ${
+                  asset.flagged
+                    ? 'border-amber-400'
+                    : asset.palette_outlier
+                      ? 'border-orange-300'
+                      : 'border-slate-200'
+                }`}
               >
                 <div className="aspect-square bg-slate-50 rounded flex items-center justify-center overflow-hidden">
                   {asset.cached ? (
@@ -211,17 +338,43 @@ function ProjectViewV2() {
                 </div>
                 <p className="text-xs text-slate-600 mt-1 truncate" title={asset.subject}>
                   {asset.subject}
+                  {asset.palette_outlier && (
+                    <span
+                      className="ml-1 text-orange-500"
+                      title={`Palette outlier (ΔE ${asset.palette_score ?? '?'}) — may not match the map style`}
+                    >
+                      ⚠
+                    </span>
+                  )}
                 </p>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-slate-400">{asset.kind}</span>
-                  <button
-                    onClick={() => startAssets.mutate([asset.id])}
-                    disabled={anyRunning}
-                    className="text-[10px] text-indigo-600 hover:text-indigo-800 disabled:opacity-40"
-                    title="Regenerate just this asset"
-                  >
-                    regen
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {asset.cached && (
+                      <button
+                        onClick={() =>
+                          flagAsset.mutate({ assetId: asset.id, flagged: !asset.flagged })
+                        }
+                        disabled={anyRunning}
+                        className={`text-[10px] disabled:opacity-40 ${
+                          asset.flagged
+                            ? 'text-amber-600 hover:text-amber-800'
+                            : 'text-slate-400 hover:text-amber-600'
+                        }`}
+                        title={asset.flagged ? 'Clear flag' : 'Flag for regeneration'}
+                      >
+                        {asset.flagged ? '⚑ flagged' : '⚐ flag'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => startAssets.mutate([asset.id])}
+                      disabled={anyRunning}
+                      className="text-[10px] text-indigo-600 hover:text-indigo-800 disabled:opacity-40"
+                      title="Regenerate just this asset"
+                    >
+                      regen
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -229,6 +382,85 @@ function ProjectViewV2() {
         </section>
       )}
     </div>
+  );
+}
+
+/** Review the repaint quadrant grid: click a painted cell to flag it for
+ * redo on the next repaint run (it repaints with context from its painted
+ * neighbors), click again to restore. */
+function RepaintQuadrants({
+  projectId,
+  disabled,
+  repaintJob,
+}: {
+  projectId: string;
+  disabled: boolean;
+  repaintJob?: V2JobState;
+}) {
+  const queryClient = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['v2-repaint-quadrants', projectId],
+    queryFn: () => v2api.repaintQuadrants(projectId),
+    enabled: !!projectId && repaintJob?.state !== 'running',
+  });
+
+  const flag = useMutation({
+    mutationFn: ({ x, y, flagged }: { x: number; y: number; flagged: boolean }) =>
+      v2api.flagRepaintQuadrant(projectId, x, y, flagged),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ['v2-repaint-quadrants', projectId] }),
+  });
+
+  if (!data?.grid || data.quadrants.length === 0) return null;
+  const { cols, rows } = data.grid;
+  const byCell = new Map(data.quadrants.map((q) => [`${q.x},${q.y}`, q.status]));
+  const flaggedCount = data.quadrants.filter((q) => q.status === 'flagged').length;
+
+  const color: Record<string, string> = {
+    generated: 'bg-emerald-300 hover:bg-amber-300 cursor-pointer',
+    flagged: 'bg-amber-500 hover:bg-emerald-300 cursor-pointer',
+    skipped: 'bg-slate-200',
+    pending: 'bg-slate-100 border border-slate-200',
+  };
+
+  return (
+    <section className="bg-white rounded-xl border border-slate-200 p-4 mb-8">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="font-semibold text-slate-700">Repaint quadrants</h2>
+        <span className="text-xs text-slate-500">
+          {data.calls_made ?? 0} calls made
+          {flaggedCount > 0 && ` · ${flaggedCount} flagged — run Repaint to redo`}
+        </span>
+      </div>
+      <p className="text-xs text-slate-500 mb-3">
+        Tiled-mode runs only. Click a painted cell to flag it for redo; flagged cells repaint
+        on the next tiled run.
+      </p>
+      <div
+        className="grid gap-px w-fit"
+        style={{ gridTemplateColumns: `repeat(${cols}, 18px)` }}
+      >
+        {Array.from({ length: rows }, (_, y) =>
+          Array.from({ length: cols }, (_, x) => {
+            const status = byCell.get(`${x},${y}`) ?? 'pending';
+            const clickable =
+              !disabled && (status === 'generated' || status === 'flagged');
+            return (
+              <div
+                key={`${x},${y}`}
+                onClick={() =>
+                  clickable && flag.mutate({ x, y, flagged: status === 'generated' })
+                }
+                className={`h-[18px] rounded-sm ${color[status]} ${
+                  disabled ? 'pointer-events-none' : ''
+                }`}
+                title={`(${x},${y}) ${status}`}
+              />
+            );
+          })
+        )}
+      </div>
+    </section>
   );
 }
 

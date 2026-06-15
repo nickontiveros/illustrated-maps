@@ -24,19 +24,52 @@ class ImportanceWarp:
         strength: float = 0.6,  # 0 = identity; ~1 = strong magnification
         radius: float = 0.18,  # gaussian sigma in normalized units
         samples: int = 1024,
+        weights: list[float] | None = None,  # per-center demand (default 1.0)
+        radii: list[float] | None = None,  # per-center sigma (default `radius`)
+        bands: tuple[list, list] | None = None,  # per-axis plateaus (lo,hi,weight)
     ):
         self.strength = max(0.0, strength)
         grid = np.linspace(0.0, 1.0, samples)
         self._grid = grid
-        self._fx = self._axis_map(grid, [c[0] for c in centers], radius)
-        self._fy = self._axis_map(grid, [c[1] for c in centers], radius)
+        if bands is not None:
+            # Flat-topped magnification over each cluster's range: density is
+            # constant inside, so the CDF is linear and the warp is *affine*
+            # there -- straight roads stay straight, with bending confined to
+            # the soft plateau edges.
+            bx, by = bands
+            self._fx = self._cdf(self._plateau_density(grid, bx))
+            self._fy = self._cdf(self._plateau_density(grid, by))
+        else:
+            n = len(centers)
+            weights = [1.0] * n if weights is None else weights
+            radii = [radius] * n if radii is None else radii
+            self._fx = self._cdf(self._gauss_density(grid, [c[0] for c in centers], weights, radii))
+            self._fy = self._cdf(self._gauss_density(grid, [c[1] for c in centers], weights, radii))
 
-    def _axis_map(self, grid: np.ndarray, centers: list[float], radius: float) -> np.ndarray:
-        density = np.ones_like(grid)
-        for c in centers:
-            density += self.strength * np.exp(-((grid - c) ** 2) / (2.0 * radius**2))
+    @staticmethod
+    def _cdf(density: np.ndarray) -> np.ndarray:
         cumulative = np.concatenate([[0.0], np.cumsum((density[1:] + density[:-1]) / 2.0)])
         return cumulative / cumulative[-1]
+
+    def _gauss_density(self, grid, centers, weights, radii) -> np.ndarray:
+        density = np.ones_like(grid)
+        for c, w, r in zip(centers, weights, radii):
+            density += self.strength * w * np.exp(-((grid - c) ** 2) / (2.0 * r**2))
+        return density
+
+    def _plateau_density(self, grid, bands) -> np.ndarray:
+        density = np.ones_like(grid)
+        for lo, hi, w in bands:
+            soft = max(0.04, (hi - lo) * 0.5)  # smooth transition width
+            up = self._smoothstep((grid - (lo - soft)) / soft)
+            down = 1.0 - self._smoothstep((grid - hi) / soft)
+            density += self.strength * w * np.clip(np.minimum(up, down), 0.0, 1.0)
+        return density
+
+    @staticmethod
+    def _smoothstep(t: np.ndarray) -> np.ndarray:
+        t = np.clip(t, 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
 
     def warp_point(self, p: Point) -> Point:
         u = float(np.interp(p[0], self._grid, self._fx))
