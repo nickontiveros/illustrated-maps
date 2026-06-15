@@ -31,6 +31,7 @@ from .compose import Compositor
 
 if TYPE_CHECKING:
     from .compose.harmonize import MoodPass
+    from .compose_spec import CompositionSpec
 from .ingest import SourceData, SourcePoi
 from .plan import PlanBuilder, plan_to_svg
 from .types import CameraSpec, CanvasSpec, PlanDocument, RegionBBox, StyleSpec
@@ -281,9 +282,11 @@ def fetch_source(project: V2Project, cache_dir: Optional[Path] = None) -> Source
     # fragmented road ways into continuous polylines before planning; then
     # synthesize urban patches so cities read as built-up areas.
     from .generalize import add_urban_areas, generalize_source
+    from .ingest import assign_feature_ids
 
     generalize_source(source, fetch_region)
     add_urban_areas(source)
+    assign_feature_ids(source)  # stable ids for the editor / composition spec
     _attach_pois(source, project)
     return source
 
@@ -337,7 +340,11 @@ def plan_warnings(source: SourceData, plan: PlanDocument) -> list[str]:
     return warnings
 
 
-def build_plan(project: V2Project, source: SourceData) -> PlanDocument:
+def build_plan(
+    project: V2Project,
+    source: SourceData,
+    spec: "CompositionSpec | None" = None,
+) -> PlanDocument:
     _attach_pois(source, project)
     frame = make_frame(project)
     builder = PlanBuilder(
@@ -347,6 +354,7 @@ def build_plan(project: V2Project, source: SourceData) -> PlanDocument:
         distortion_strength=project.distortion_strength,
         seed=project.seed,
         road_treatment=project.road_treatment,
+        spec=spec,
     )
     plan = builder.build(source, title=project.display_title, frame=frame)
     plan.frame = frame.to_dict()

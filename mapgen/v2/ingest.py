@@ -22,6 +22,7 @@ class SourceRoad:
     coords: list[LonLat]
     name: Optional[str] = None
     ref: Optional[str] = None  # route designation (e.g. "I 10", "US 60")
+    id: Optional[str] = None  # stable feature id (see assign_feature_ids)
 
 
 @dataclass
@@ -30,6 +31,7 @@ class SourcePolygon:
     exterior: list[LonLat]
     holes: list[list[LonLat]] = field(default_factory=list)
     name: Optional[str] = None
+    id: Optional[str] = None  # stable feature id (see assign_feature_ids)
 
 
 @dataclass
@@ -55,6 +57,7 @@ class SourcePlace:
     longitude: float
     kind: str = "district"  # district | water
     population: Optional[float] = None  # drives city patch + label size
+    id: Optional[str] = None  # stable feature id (see assign_feature_ids)
 
 
 @dataclass
@@ -69,6 +72,48 @@ class SourceData:
     # (feature count, "failed", or "empty"), recorded into the plan so a
     # missing layer is visible instead of silently absent.
     provenance: dict = field(default_factory=dict)
+
+
+def _geom_hash(name: Optional[str], coords) -> str:
+    import hashlib
+
+    pts = list(coords)[:8]  # first few points keep it cheap but distinctive
+    key = (name or "") + "|" + ";".join(f"{round(x, 5)},{round(y, 5)}" for x, y in pts)
+    return hashlib.sha1(key.encode()).hexdigest()[:10]
+
+
+def assign_feature_ids(source: "SourceData") -> None:
+    """Deterministically fill stable ids on roads/ground/places (idempotent).
+
+    Ids are geometry-derived so they survive a re-fetch (same generalized
+    geometry → same id), and de-duplicated within each layer so the
+    CompositionSpec can reference every feature uniquely. POIs already carry
+    their own slug ids and are left untouched.
+    """
+    seen: set[str] = {
+        f.id
+        for group in (source.roads, source.ground, source.places)
+        for f in group
+        if f.id is not None
+    }
+
+    def unique(base: str) -> str:
+        cand, n = base, 1
+        while cand in seen:
+            n += 1
+            cand = f"{base}#{n}"
+        seen.add(cand)
+        return cand
+
+    for r in source.roads:
+        if r.id is None:
+            r.id = unique(f"road:{_geom_hash(r.ref or r.name, r.coords)}")
+    for g in source.ground:
+        if g.id is None:
+            g.id = unique(f"ground:{_geom_hash(g.name, g.exterior)}")
+    for p in source.places:
+        if p.id is None:
+            p.id = unique(f"place:{_geom_hash(p.name, [(p.longitude, p.latitude)])}")
 
 
 _HIGHWAY_TO_CLASS = {

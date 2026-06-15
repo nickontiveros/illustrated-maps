@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from ...v2 import pipeline
+from ...v2.compose_spec import COMPOSITION_FILENAME, CompositionSpec
 from ...v2.assets.manifest import slugify
 from ...v2.types import PlanDocument
 
@@ -282,7 +283,8 @@ def start_plan(project_id: str, background: BackgroundTasks) -> dict:
 
     def work() -> None:
         source = pipeline.fetch_source(project, cache_dir=directory / "cache")
-        document = pipeline.build_plan(project, source)
+        spec = CompositionSpec.load_or_default(directory)
+        document = pipeline.build_plan(project, source, spec=spec)
         pipeline.write_plan(document, directory)
 
     background.add_task(_run_stage, project_id, "plan", work)
@@ -305,6 +307,22 @@ def get_preview(project_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "No preview yet; run the plan stage first")
     return FileResponse(path, media_type="image/svg+xml")
+
+
+@router.get("/{project_id}/composition")
+def get_composition(project_id: str) -> Response:
+    """The editable layout document; an all-auto default if none is saved yet."""
+    _, directory = _load_project(project_id)
+    spec = CompositionSpec.load_or_default(directory)
+    return Response(spec.model_dump_json(indent=1), media_type="application/json")
+
+
+@router.put("/{project_id}/composition")
+def put_composition(project_id: str, spec: CompositionSpec) -> dict:
+    """Persist an edited spec. Re-run the plan stage to apply it."""
+    _, directory = _load_project(project_id)
+    spec.save(directory / COMPOSITION_FILENAME)
+    return {"saved": True, "version": spec.version}
 
 
 class AssetsRequest(BaseModel):

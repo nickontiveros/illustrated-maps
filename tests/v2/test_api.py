@@ -95,6 +95,30 @@ def test_plan_stage(client, project_payload):
     assert b"<svg" in preview.content
 
 
+def test_composition_round_trip_and_applied_to_plan(client, project_payload):
+    project_id = _create(client, project_payload)
+    # No spec saved yet -> an all-auto default.
+    default = client.get(f"/api/v2/projects/{project_id}/composition")
+    assert default.status_code == 200
+    assert default.json()["warp"]["mode"] == "auto"
+
+    # Save a spec that hides one POI.
+    spec = {"features": {"pois": {"exclude": ["old_lighthouse"]}}}
+    put = client.put(f"/api/v2/projects/{project_id}/composition", json=spec)
+    assert put.status_code == 200 and put.json()["saved"] is True
+
+    # It persists...
+    saved = client.get(f"/api/v2/projects/{project_id}/composition").json()
+    assert saved["features"]["pois"]["exclude"] == ["old_lighthouse"]
+
+    # ...and the plan stage honors it.
+    assert client.post(f"/api/v2/projects/{project_id}/plan").status_code == 202
+    plan = client.get(f"/api/v2/projects/{project_id}/plan").json()
+    ids = [p["id"] for p in plan["pois"]]
+    assert "old_lighthouse" not in ids
+    assert "maritime_museum" in ids
+
+
 def test_assets_require_plan(client, project_payload):
     project_id = _create(client, project_payload)
     response = client.post(f"/api/v2/projects/{project_id}/assets", json={"stub": True})

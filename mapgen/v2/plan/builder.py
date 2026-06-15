@@ -19,7 +19,8 @@ import random
 import re
 
 from ..assets.manifest import build_manifest, poi_asset_id
-from ..ingest import GeoFrame, SourceData
+from ..compose_spec import CompositionSpec
+from ..ingest import GeoFrame, SourceData, assign_feature_ids
 from ..types import (
     BuildingFootprint,
     CameraSpec,
@@ -154,6 +155,7 @@ class PlanBuilder:
         distortion_strength: float = 0.5,
         seed: int = 7,
         road_treatment: str = "full",
+        spec: "CompositionSpec | None" = None,
     ):
         self.canvas = canvas or CanvasSpec()
         self.camera_spec = camera or CameraSpec()
@@ -161,6 +163,10 @@ class PlanBuilder:
         self.distortion_strength = distortion_strength
         self.seed = seed
         self.road_treatment = road_treatment
+        # The editable layout document. An all-auto spec (the default) reads
+        # like no spec at all: every seam below falls back to its heuristic, so
+        # the plan is byte-identical to the pre-spec pipeline.
+        self.spec = spec or CompositionSpec()
 
     def build(
         self,
@@ -172,6 +178,10 @@ class PlanBuilder:
         cam = ObliqueCamera(self.camera_spec, canvas)
         rng = random.Random(self.seed)
         frame = frame or GeoFrame(source.region)
+        # Stable ids for feature selection / road routing (idempotent: the
+        # pipeline already assigned them; hand-built test sources get them now).
+        assign_feature_ids(source)
+        source = self._select_features(source)
 
         def geo_norm(coord: tuple[float, float]) -> Point:
             return frame.to_normalized(coord)
@@ -206,43 +216,14 @@ class PlanBuilder:
                         for h in poly.holes
                     ],
                     depth=cam.depth(mid_y),
+                    id=poly.id,
                 )
             )
 
         # --- Roads / waterways ---
-        if self.road_treatment == "minimal":
-            # Interim default for warped regional posters: only the key named
-            # highways, drawn UNWARPED (straight). Faithfully warping the dense
-            # web bends straight roads into spaghetti; until the composition
-            # editor lets the user route roads by hand, a sparse straight
-            # skeleton reads cleaner than an automatically-mangled full network.
-            roads = self._minimal_roads(source, cam, geo_norm, canvas)
-        else:
-            flat_roads: list[tuple[RoadClass, list[Point]]] = []
-            road_names: list[str | None] = []
-            road_refs: list[str | None] = []
-            for road in source.roads:
-                pts = stylize_polyline(to_flat(road.coords), simplify_tol, densify_px=densify_px)
-                if len(pts) >= 2:
-                    flat_roads.append((road.cls, pts))
-                    road_names.append(road.name)
-                    road_refs.append(road.ref)
-            name_of = {id(pts): name for (_, pts), name in zip(flat_roads, road_names)}
-            ref_of = {id(pts): ref for (_, pts), ref in zip(flat_roads, road_refs)}
-            kept = prune_roads(flat_roads, canvas.width_px, area_px=cam.flat_width * cam.flat_height)
-            roads = []
-            for cls, pts in kept:
-                mid_y = pts[len(pts) // 2][1]
-                roads.append(
-                    RoadPath(
-                        cls=cls,
-                        points=cam.project_points(pts),
-                        width_px=road_width_px(cls, canvas.width_px) * cam.scale_at(mid_y),
-                        name=name_of.get(id(pts)),
-                        ref=ref_of.get(id(pts)),
-                        depth=cam.depth(mid_y),
-                    )
-                )
+        roads = self._build_roads(
+            source, cam, geo_norm, canvas, to_flat, simplify_tol, densify_px
+        )
 
         # --- Buildings (2.5D fabric) ---
         buildings: list[BuildingFootprint] = []
@@ -301,7 +282,11 @@ class PlanBuilder:
                 flat = (normalized[0] * cam.flat_width, normalized[1] * cam.flat_height)
                 river_labels.append((poi.name, [cam.project_point(flat)]))
                 continue
+            ov = self.spec.pois.get(poi.id)
             normalized = warp.warp_point(geo_norm((poi.longitude, poi.latitude)))
+            if ov and ov.offset_uv:
+                # A manual nudge in (warp-independent) normalized space.
+                normalized = (normalized[0] + ov.offset_uv[0], normalized[1] + ov.offset_uv[1])
             flat = (normalized[0] * cam.flat_width, normalized[1] * cam.flat_height)
             anchor = cam.project_point(flat)
             slot = PoiSlot(
@@ -310,7 +295,7 @@ class PlanBuilder:
                 anchor=anchor,
                 width_px=0,
                 height_px=0,
-                tier=poi.tier,
+                tier=ov.tier if (ov and ov.tier) else poi.tier,
                 depth=cam.depth(flat[1]),
                 asset_id=poi_asset_id(poi.id),
                 latitude=poi.latitude,
@@ -321,8 +306,14 @@ class PlanBuilder:
                 # slots keep it as a leader-line target.
                 leader_anchor=anchor,
             )
-            slots.append(sized_slot(slot, canvas.width_px, cam.scale_at(flat[1]), sprite_scale))
+            size_mul = ov.size if (ov and ov.size) else 1.0
+            slots.append(
+                sized_slot(slot, canvas.width_px, cam.scale_at(flat[1]), sprite_scale * size_mul)
+            )
         title_box = self._title_box(canvas)
+        # True (pre-overlap) anchors, so a forced leader can point home even if
+        # the heuristic would not have drawn one.
+        true_anchor = {s.id: s.anchor for s in slots}
         slots = resolve_poi_overlaps(
             slots, canvas.width_px, canvas.height_px, reserved=[title_box]
         )
@@ -341,6 +332,16 @@ class PlanBuilder:
                 lx, ly = s.leader_anchor
                 if tx0 <= lx <= tx1 and ty0 <= ly <= ty1:
                     s.offset, s.leader_anchor = False, None
+        # Per-POI leader overrides from the spec.
+        for s in slots:
+            ov = self.spec.pois.get(s.id)
+            if not ov:
+                continue
+            if ov.leader == "suppress":
+                s.offset, s.leader_anchor = False, None
+            elif ov.leader == "force":
+                s.leader_anchor = true_anchor.get(s.id, s.anchor)
+                s.offset = True
 
         # --- Scatter (sprite fabric) ---
         scatter = self._scatter(ground, rng, canvas, cam)
@@ -431,32 +432,119 @@ class PlanBuilder:
             return False
         return any(cls._MAINLINE.match(part.strip()) for part in str(ref).split(";"))
 
-    def _minimal_roads(
-        self, source: SourceData, cam: ObliqueCamera, geo_norm, canvas: CanvasSpec
+    def _select_features(self, source: SourceData) -> SourceData:
+        """Drop features the spec excludes (or whose layer default hides them),
+        before any layout work. An all-auto spec keeps everything."""
+        from dataclasses import replace
+
+        f = self.spec.features
+
+        def road_ok(r) -> bool:
+            sel = f.rivers if r.cls in (RoadClass.RIVER, RoadClass.STREAM) else f.roads
+            return sel.visible(r.id, auto_visible=True)
+
+        return replace(
+            source,
+            roads=[r for r in source.roads if road_ok(r)],
+            pois=[p for p in source.pois if f.pois.visible(p.id, auto_visible=True)],
+            places=[p for p in source.places if f.places.visible(p.id, auto_visible=True)],
+        )
+
+    def _road_treatment_for(self, road) -> tuple[str, list | None]:
+        """Effective routing for one road: per-road spec override, else the
+        global ``road_treatment``. Returns (treatment, reshape-polyline)."""
+        ov = self.spec.roads.get(road.id)
+        if ov is not None:
+            return ov.treatment, ov.reshape
+        if self.road_treatment == "minimal":
+            # Mainline I/US routes + major rivers drawn straight; the rest hidden.
+            if road.cls is RoadClass.RIVER or self._is_mainline(road.ref):
+                return "straight", None
+            return "hidden", None
+        return "warped", None
+
+    def _build_roads(
+        self, source, cam, geo_norm, canvas, to_flat, simplify_tol, densify_px
     ) -> list["RoadPath"]:
-        """Mainline interstates/US routes + major rivers, drawn UNWARPED."""
-        out: list[RoadPath] = []
-        simplify_tol = canvas.width_px * 0.004
+        """Route every road by its effective treatment: warped roads go through
+        the collective ink-budget prune; straight roads bypass the warp (and may
+        follow a user-supplied reshape polyline); hidden roads are dropped."""
+        warped_src = []
+        straight: list[RoadPath] = []
         for road in source.roads:
-            is_river = road.cls is RoadClass.RIVER
-            if not is_river and not self._is_mainline(road.ref):
+            treat, reshape = self._road_treatment_for(road)
+            if treat == "hidden":
                 continue
+            if treat == "straight":
+                rp = self._straight_road(road, cam, geo_norm, canvas, reshape)
+                if rp is not None:
+                    straight.append(rp)
+            else:  # "warped"
+                warped_src.append(road)
+        warped = self._warped_roads(
+            warped_src, cam, canvas, to_flat, simplify_tol, densify_px
+        )
+        return warped + straight
+
+    def _straight_road(
+        self, road, cam: ObliqueCamera, geo_norm, canvas: CanvasSpec, reshape=None
+    ) -> "RoadPath | None":
+        """One road drawn UNWARPED (straight). With ``reshape`` (a normalized
+        polyline) the user's hand-drawn centerline is used instead of the OSM
+        geometry."""
+        simplify_tol = canvas.width_px * 0.004
+        if reshape:
+            flat = [(u * cam.flat_width, v * cam.flat_height) for u, v in reshape]
+        else:
             flat = [
                 (geo_norm(c)[0] * cam.flat_width, geo_norm(c)[1] * cam.flat_height)
                 for c in road.coords
             ]
-            pts = simplify_polyline(cam.project_points(flat), simplify_tol)
-            if len(pts) < 2:
-                continue
+        pts = simplify_polyline(cam.project_points(flat), simplify_tol)
+        if len(pts) < 2:
+            return None
+        mid_y = pts[len(pts) // 2][1]
+        return RoadPath(
+            cls=road.cls,
+            points=pts,
+            width_px=road_width_px(road.cls, canvas.width_px) * cam.scale_at(mid_y),
+            name=road.name,
+            ref=road.ref,
+            depth=cam.depth(mid_y),
+            id=road.id,
+        )
+
+    def _warped_roads(
+        self, roads_src, cam, canvas, to_flat, simplify_tol, densify_px
+    ) -> list["RoadPath"]:
+        """Warp + stylize + collectively prune (ink budget) a set of roads."""
+        flat_roads: list[tuple[RoadClass, list[Point]]] = []
+        road_names: list[str | None] = []
+        road_refs: list[str | None] = []
+        road_ids: list[str | None] = []
+        for road in roads_src:
+            pts = stylize_polyline(to_flat(road.coords), simplify_tol, densify_px=densify_px)
+            if len(pts) >= 2:
+                flat_roads.append((road.cls, pts))
+                road_names.append(road.name)
+                road_refs.append(road.ref)
+                road_ids.append(road.id)
+        name_of = {id(pts): name for (_, pts), name in zip(flat_roads, road_names)}
+        ref_of = {id(pts): ref for (_, pts), ref in zip(flat_roads, road_refs)}
+        id_of = {id(pts): rid for (_, pts), rid in zip(flat_roads, road_ids)}
+        kept = prune_roads(flat_roads, canvas.width_px, area_px=cam.flat_width * cam.flat_height)
+        out: list[RoadPath] = []
+        for cls, pts in kept:
             mid_y = pts[len(pts) // 2][1]
             out.append(
                 RoadPath(
-                    cls=road.cls,
-                    points=pts,
-                    width_px=road_width_px(road.cls, canvas.width_px) * cam.scale_at(mid_y),
-                    name=road.name,
-                    ref=road.ref,
+                    cls=cls,
+                    points=cam.project_points(pts),
+                    width_px=road_width_px(cls, canvas.width_px) * cam.scale_at(mid_y),
+                    name=name_of.get(id(pts)),
+                    ref=ref_of.get(id(pts)),
                     depth=cam.depth(mid_y),
+                    id=id_of.get(id(pts)),
                 )
             )
         return out
@@ -480,6 +568,38 @@ class PlanBuilder:
         )
         return min(base_radius, max(self.MIN_WARP_RADIUS, 2.0 * nn))
 
+    @staticmethod
+    def _magnify_weight(band_width: float, magnify: float) -> float:
+        """Plateau weight (density bump) that magnifies a band by ``magnify``.
+
+        A band of width ``w`` with interior density ``1 + weight`` over a base
+        of 1 stretches its contents by ``(1 + weight) / (1 + weight * w)``
+        relative to uniform. Solving for the requested magnification gives
+        ``weight = (m - 1) / (1 - m * w)``. ``magnify < 1`` yields a negative
+        weight (compression); the weight is floored at -0.9 so interior density
+        stays positive, and a region too wide to reach ``m`` saturates instead
+        of blowing up.
+        """
+        if magnify == 1.0 or band_width <= 0:
+            return 0.0
+        denom = 1.0 - magnify * band_width
+        if denom <= 1e-3:
+            return 1000.0  # region too wide for this magnification; saturate
+        return max(-0.9, (magnify - 1.0) / denom)
+
+    def _manual_bands(self, regions):
+        """Plateau bands (per axis) from the spec's drawn warp regions."""
+        bands_x: list[tuple[float, float, float]] = []
+        bands_y: list[tuple[float, float, float]] = []
+        for r in regions:
+            u0, u1 = sorted((r.bounds[0], r.bounds[2]))
+            v0, v1 = sorted((r.bounds[1], r.bounds[3]))
+            if u1 - u0 <= 0 or v1 - v0 <= 0:
+                continue
+            bands_x.append((u0, u1, self._magnify_weight(u1 - u0, r.magnify)))
+            bands_y.append((v0, v1, self._magnify_weight(v1 - v0, r.magnify)))
+        return bands_x, bands_y
+
     def _fit_warp(self, source: SourceData, cam: ObliqueCamera, geo_norm):
         """Bounded-plateau cartogram fit.
 
@@ -491,34 +611,50 @@ class PlanBuilder:
         empty desert between it and far outliers. POIs the bounded zoom can't
         separate get leader lines. Returns (warp, sprite_scale, residual_px,
         coincident_count[=leader count]).
+
+        ``spec.warp.mode`` selects the source of the plateau bands: ``auto``
+        clusters the POIs (below); ``manual`` builds them from the user's drawn
+        regions; ``off`` is the identity warp. All three share the residual /
+        leader pass at the end.
         """
+        mode = self.spec.warp.mode
         sprite_pois = [p for p in source.pois if p.feature_type != "river"]
-        if not sprite_pois or self.distortion_strength <= 0:
-            return IdentityWarp(), 1.0, 0.0, 0
-
         centers = [geo_norm((p.longitude, p.latitude)) for p in sprite_pois]
-
         bands_x: list[tuple[float, float, float]] = []
         bands_y: list[tuple[float, float, float]] = []
-        for members in _cluster_indices(centers, self.WARP_LINK_DIST):
-            if len(members) < 2:
-                continue
-            xs = [centers[i][0] for i in members]
-            ys = [centers[i][1] for i in members]
-            if max(max(xs) - min(xs), max(ys) - min(ys)) < self.MIN_PLATEAU_EXTENT:
-                continue
-            cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-            hx = min((max(xs) - min(xs)) / 2, self.MAX_HALF_BAND)
-            hy = min((max(ys) - min(ys)) / 2, self.MAX_HALF_BAND)
-            bands_x.append((cx - hx, cx + hx, _plateau_weight(2 * hx, self.WARP_TARGET_FRACTION)))
-            bands_y.append((cy - hy, cy + hy, _plateau_weight(2 * hy, self.WARP_TARGET_FRACTION)))
 
-        if bands_x:
-            warp: IdentityWarp | ImportanceWarp = ImportanceWarp(
-                centers=[], strength=1.0, bands=(bands_x, bands_y)
+        if mode == "off":
+            warp: IdentityWarp | ImportanceWarp = IdentityWarp()
+        elif mode == "manual":
+            bands_x, bands_y = self._manual_bands(self.spec.warp.regions)
+            warp = (
+                ImportanceWarp(centers=[], strength=1.0, bands=(bands_x, bands_y))
+                if bands_x
+                else IdentityWarp()
             )
-        else:
-            warp = IdentityWarp()
+        else:  # "auto"
+            if not sprite_pois or self.distortion_strength <= 0:
+                return IdentityWarp(), 1.0, 0.0, 0
+            for members in _cluster_indices(centers, self.WARP_LINK_DIST):
+                if len(members) < 2:
+                    continue
+                xs = [centers[i][0] for i in members]
+                ys = [centers[i][1] for i in members]
+                if max(max(xs) - min(xs), max(ys) - min(ys)) < self.MIN_PLATEAU_EXTENT:
+                    continue
+                cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+                hx = min((max(xs) - min(xs)) / 2, self.MAX_HALF_BAND)
+                hy = min((max(ys) - min(ys)) / 2, self.MAX_HALF_BAND)
+                bands_x.append((cx - hx, cx + hx, _plateau_weight(2 * hx, self.WARP_TARGET_FRACTION)))
+                bands_y.append((cy - hy, cy + hy, _plateau_weight(2 * hy, self.WARP_TARGET_FRACTION)))
+            warp = (
+                ImportanceWarp(centers=[], strength=1.0, bands=(bands_x, bands_y))
+                if bands_x
+                else IdentityWarp()
+            )
+
+        if not sprite_pois:
+            return warp, 1.0, 0.0, 0
 
         threshold = self.MAX_RESIDUAL_FRACTION * self.canvas.width_px
         sprite_scale = 1.0

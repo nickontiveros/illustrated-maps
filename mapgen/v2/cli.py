@@ -18,6 +18,7 @@ from pathlib import Path
 import click
 
 from . import pipeline
+from .compose_spec import CompositionSpec
 from .types import PlanDocument
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,8 @@ def plan(project_dir: str) -> None:
     project, directory = _load_project(project_dir)
     click.echo(f"Fetching OSM data for {project.name}...")
     source = pipeline.fetch_source(project, cache_dir=directory / "cache")
-    document = pipeline.build_plan(project, source)
+    spec = CompositionSpec.load_or_default(directory)
+    document = pipeline.build_plan(project, source, spec=spec)
     plan_path, preview_path = pipeline.write_plan(document, directory)
     click.echo(f"Plan: {plan_path}")
     click.echo(f"Preview: {preview_path}")
@@ -222,7 +224,8 @@ def generate(project_dir: str, stub: bool, harmonize: bool, scale: float) -> Non
     project, directory = _load_project(project_dir)
     click.echo(f"[1/3] Planning {project.name}...")
     source = pipeline.fetch_source(project, cache_dir=directory / "cache")
-    document = pipeline.build_plan(project, source)
+    spec = CompositionSpec.load_or_default(directory)
+    document = pipeline.build_plan(project, source, spec=spec)
     pipeline.write_plan(document, directory)
     _echo_warnings(document)
     click.echo("[2/3] Generating assets...")

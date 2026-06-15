@@ -106,6 +106,7 @@ class GroundPolygon(BaseModel):
     exterior: list[Point]
     holes: list[list[Point]] = Field(default_factory=list)
     depth: float = 0.0  # 0 = near (bottom), 1 = far (horizon)
+    id: Optional[str] = None  # stable source feature id (for the editor / spec)
 
 
 class RoadPath(BaseModel):
@@ -115,6 +116,7 @@ class RoadPath(BaseModel):
     name: Optional[str] = None
     depth: float = 0.0
     ref: Optional[str] = None  # route designation for shields, e.g. "I 10"
+    id: Optional[str] = None  # stable source feature id (for the editor / spec)
 
 
 class BuildingFootprint(BaseModel):
