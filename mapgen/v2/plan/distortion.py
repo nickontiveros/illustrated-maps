@@ -60,7 +60,7 @@ class ImportanceWarp:
     def _plateau_density(self, grid, bands) -> np.ndarray:
         density = np.ones_like(grid)
         for lo, hi, w in bands:
-            soft = max(0.04, (hi - lo) * 0.5)  # smooth transition width
+            soft = max(0.025, (hi - lo) * 0.3)  # smooth transition width
             up = self._smoothstep((grid - (lo - soft)) / soft)
             down = 1.0 - self._smoothstep((grid - hi) / soft)
             density += self.strength * w * np.clip(np.minimum(up, down), 0.0, 1.0)

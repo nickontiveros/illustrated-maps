@@ -238,7 +238,77 @@ class TestAdaptiveWarp:
         assert all(s.leader_anchor is None and not s.offset for s in plan.pois)
 
 
-# --- Labels ---------------------------------------------------------------------
+class TestMinimalRoads:
+    """The 'minimal' road treatment: mainline I/US routes + major rivers,
+    drawn UNWARPED so they read as a clean straight orientation skeleton."""
+
+    def test_is_mainline_keeps_routes_drops_variants(self):
+        f = PlanBuilder._is_mainline
+        assert f("I 10") and f("US 60")
+        assert f("US 180;AZ 64")  # concurrency that includes a mainline
+        assert not f("US 80 Hist")
+        assert not f("I 10 BUS")
+        assert not f("I 40 BUS;US 66 Hist")
+        assert not f("AZ 87")
+        assert not f(None)
+
+    def _lonlat(self, region):
+        lon = lambda f: region.west + f * (region.east - region.west)
+        lat = lambda f: region.south + f * (region.north - region.south)
+        return lon, lat
+
+    def test_keeps_only_mainline_and_rivers(self, region):
+        lon, lat = self._lonlat(region)
+        roads = [
+            SourceRoad(cls=RoadClass.PRIMARY, ref="I 10",
+                       coords=[(lon(0.1), lat(0.5)), (lon(0.9), lat(0.5))]),
+            SourceRoad(cls=RoadClass.PRIMARY, ref="US 80 Hist",
+                       coords=[(lon(0.1), lat(0.3)), (lon(0.9), lat(0.3))]),
+            SourceRoad(cls=RoadClass.PRIMARY, ref="AZ 87",
+                       coords=[(lon(0.1), lat(0.7)), (lon(0.9), lat(0.7))]),
+            SourceRoad(cls=RoadClass.RIVER, name="Big River",
+                       coords=[(lon(0.0), lat(0.8)), (lon(1.0), lat(0.6))]),
+        ]
+        pois = [SourcePoi(id="p", name="P", latitude=lat(0.5), longitude=lon(0.5), tier=2)]
+        src = SourceData(region=region, roads=roads, pois=pois)
+        plan = PlanBuilder(
+            canvas=CanvasSpec(width_px=1000, height_px=1414, dpi=72),
+            road_treatment="minimal",
+        ).build(src)
+        refs = {r.ref for r in plan.roads if r.cls is not RoadClass.RIVER}
+        assert refs == {"I 10"}  # historic variant + state route dropped
+        assert any(r.cls is RoadClass.RIVER for r in plan.roads)
+
+    def test_minimal_roads_drawn_straight_despite_warp(self, region):
+        # A straight interstate stays collinear even when a dense POI cluster
+        # warps the map -- a projective/affine camera preserves straight lines,
+        # and the minimal treatment bypasses the (non-linear) warp entirely.
+        lon, lat = self._lonlat(region)
+        road = SourceRoad(
+            cls=RoadClass.PRIMARY, ref="I 10",
+            coords=[(lon(x / 10.0), lat(0.5)) for x in range(1, 10)],
+        )
+        pois = [
+            SourcePoi(id=f"c{i}", name=f"C{i}",
+                      latitude=lat(0.2) + 0.001 * (i % 3),
+                      longitude=lon(0.8) + 0.001 * (i // 3), tier=2)
+            for i in range(9)
+        ]
+        src = SourceData(region=region, roads=[road], pois=pois)
+        plan = PlanBuilder(
+            canvas=CanvasSpec(width_px=1000, height_px=1414, dpi=72),
+            road_treatment="minimal",
+        ).build(src)
+        pts = next(r.points for r in plan.roads if r.cls is not RoadClass.RIVER)
+        (x0, y0), (x1, y1) = pts[0], pts[-1]
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        # max perpendicular distance of any interior point from the end-to-end
+        # line: ~0 for a straight road, large if the warp had bent it.
+        max_perp = max(
+            abs((y1 - y0) * px - (x1 - x0) * py + x1 * y0 - y1 * x0) / seg_len
+            for px, py in pts
+        )
+        assert max_perp < 2.0
 
 
 class TestLabels:

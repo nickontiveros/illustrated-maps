@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 
 from ..assets.manifest import build_manifest, poi_asset_id
 from ..ingest import GeoFrame, SourceData
@@ -86,6 +87,16 @@ SCATTER_WIDTH_FRACTIONS = {
 }
 
 
+def _plateau_weight(band_width: float, target_fraction: float) -> float:
+    """Plateau bump weight so a band of width ``band_width`` claims about
+    ``target_fraction`` of the axis after the CDF remap (sharp-band estimate;
+    soft edges spread it a little more)."""
+    bw = min(0.6, max(0.01, band_width))
+    f = min(0.7, max(0.0, target_fraction))
+    d = f * (1.0 - bw) / (bw * (1.0 - f))  # required interior density ratio
+    return max(0.0, d - 1.0)
+
+
 def _cluster_indices(centers: list[Point], link: float) -> list[list[int]]:
     """Single-linkage grouping: POIs within ``link`` (normalized) join a group.
 
@@ -142,12 +153,14 @@ class PlanBuilder:
         style: StyleSpec | None = None,
         distortion_strength: float = 0.5,
         seed: int = 7,
+        road_treatment: str = "full",
     ):
         self.canvas = canvas or CanvasSpec()
         self.camera_spec = camera or CameraSpec()
         self.style = style or StyleSpec()
         self.distortion_strength = distortion_strength
         self.seed = seed
+        self.road_treatment = road_treatment
 
     def build(
         self,
@@ -197,31 +210,39 @@ class PlanBuilder:
             )
 
         # --- Roads / waterways ---
-        flat_roads: list[tuple[RoadClass, list[Point]]] = []
-        road_names: list[str | None] = []
-        road_refs: list[str | None] = []
-        for road in source.roads:
-            pts = stylize_polyline(to_flat(road.coords), simplify_tol, densify_px=densify_px)
-            if len(pts) >= 2:
-                flat_roads.append((road.cls, pts))
-                road_names.append(road.name)
-                road_refs.append(road.ref)
-        name_of = {id(pts): name for (_, pts), name in zip(flat_roads, road_names)}
-        ref_of = {id(pts): ref for (_, pts), ref in zip(flat_roads, road_refs)}
-        kept = prune_roads(flat_roads, canvas.width_px, area_px=cam.flat_width * cam.flat_height)
-        roads: list[RoadPath] = []
-        for cls, pts in kept:
-            mid_y = pts[len(pts) // 2][1]
-            roads.append(
-                RoadPath(
-                    cls=cls,
-                    points=cam.project_points(pts),
-                    width_px=road_width_px(cls, canvas.width_px) * cam.scale_at(mid_y),
-                    name=name_of.get(id(pts)),
-                    ref=ref_of.get(id(pts)),
-                    depth=cam.depth(mid_y),
+        if self.road_treatment == "minimal":
+            # Interim default for warped regional posters: only the key named
+            # highways, drawn UNWARPED (straight). Faithfully warping the dense
+            # web bends straight roads into spaghetti; until the composition
+            # editor lets the user route roads by hand, a sparse straight
+            # skeleton reads cleaner than an automatically-mangled full network.
+            roads = self._minimal_roads(source, cam, geo_norm, canvas)
+        else:
+            flat_roads: list[tuple[RoadClass, list[Point]]] = []
+            road_names: list[str | None] = []
+            road_refs: list[str | None] = []
+            for road in source.roads:
+                pts = stylize_polyline(to_flat(road.coords), simplify_tol, densify_px=densify_px)
+                if len(pts) >= 2:
+                    flat_roads.append((road.cls, pts))
+                    road_names.append(road.name)
+                    road_refs.append(road.ref)
+            name_of = {id(pts): name for (_, pts), name in zip(flat_roads, road_names)}
+            ref_of = {id(pts): ref for (_, pts), ref in zip(flat_roads, road_refs)}
+            kept = prune_roads(flat_roads, canvas.width_px, area_px=cam.flat_width * cam.flat_height)
+            roads = []
+            for cls, pts in kept:
+                mid_y = pts[len(pts) // 2][1]
+                roads.append(
+                    RoadPath(
+                        cls=cls,
+                        points=cam.project_points(pts),
+                        width_px=road_width_px(cls, canvas.width_px) * cam.scale_at(mid_y),
+                        name=name_of.get(id(pts)),
+                        ref=ref_of.get(id(pts)),
+                        depth=cam.depth(mid_y),
+                    )
                 )
-            )
 
         # --- Buildings (2.5D fabric) ---
         buildings: list[BuildingFootprint] = []
@@ -306,7 +327,10 @@ class PlanBuilder:
             slots, canvas.width_px, canvas.height_px, reserved=[title_box]
         )
         slots = assign_leader_lines(
-            slots, leader_threshold_px=self.MAX_RESIDUAL_FRACTION * canvas.width_px
+            slots,
+            leader_threshold_px=self.MAX_RESIDUAL_FRACTION * canvas.width_px,
+            canvas_width_px=canvas.width_px,
+            canvas_height_px=canvas.height_px,
         )
         # A sprite dropped below the title cartouche must not also sprout a
         # leader back up into it (the true dot would hide under the banner) --
@@ -383,9 +407,59 @@ class PlanBuilder:
     # accepts for POIs the warp could separate, as a fraction of poster width.
     MAX_RESIDUAL_FRACTION = 0.015
     MIN_SPRITE_SCALE = 0.65
-    # Numeric safety ceiling on the global warp gain.
-    MAX_WARP_GAIN = 64.0
-    MIN_WARP_RADIUS = 0.012  # narrowest per-POI sigma (resolved at 1024 samples)
+    MAX_WARP_GAIN = 64.0  # (legacy gaussian path)
+    MIN_WARP_RADIUS = 0.012  # (legacy gaussian path)
+    # Bounded magnification plateau: each dense cluster zooms uniformly (a
+    # constant-density region => linear CDF => affine warp => straight interior
+    # roads), capped in width and in the axis fraction it may claim so it can
+    # never run away and eat the map.
+    WARP_LINK_DIST = 0.07          # normalized distance grouping POIs into a cluster
+    MAX_HALF_BAND = 0.09           # cap on a plateau's half-width per axis
+    WARP_TARGET_FRACTION = 0.40    # axis fraction a single plateau may claim
+    MIN_PLATEAU_EXTENT = 0.015     # clusters narrower than this stay unwarped
+
+    # In the "minimal" treatment keep only *mainline* interstates and US routes
+    # (the orientation skeleton) plus major rivers. A ref may carry several
+    # concurrent designations ("US 180;AZ 64"); keep the road if ANY is a clean
+    # mainline. Historic/business/spur variants ("US 80 Hist", "I 10 BUS") are
+    # dropped -- they fragment and clutter without aiding orientation.
+    _MAINLINE = re.compile(r"^(I|US)\s+\d+$")
+
+    @classmethod
+    def _is_mainline(cls, ref: str | None) -> bool:
+        if not ref:
+            return False
+        return any(cls._MAINLINE.match(part.strip()) for part in str(ref).split(";"))
+
+    def _minimal_roads(
+        self, source: SourceData, cam: ObliqueCamera, geo_norm, canvas: CanvasSpec
+    ) -> list["RoadPath"]:
+        """Mainline interstates/US routes + major rivers, drawn UNWARPED."""
+        out: list[RoadPath] = []
+        simplify_tol = canvas.width_px * 0.004
+        for road in source.roads:
+            is_river = road.cls is RoadClass.RIVER
+            if not is_river and not self._is_mainline(road.ref):
+                continue
+            flat = [
+                (geo_norm(c)[0] * cam.flat_width, geo_norm(c)[1] * cam.flat_height)
+                for c in road.coords
+            ]
+            pts = simplify_polyline(cam.project_points(flat), simplify_tol)
+            if len(pts) < 2:
+                continue
+            mid_y = pts[len(pts) // 2][1]
+            out.append(
+                RoadPath(
+                    cls=road.cls,
+                    points=pts,
+                    width_px=road_width_px(road.cls, canvas.width_px) * cam.scale_at(mid_y),
+                    name=road.name,
+                    ref=road.ref,
+                    depth=cam.depth(mid_y),
+                )
+            )
+        return out
 
     def _title_box(self, canvas: CanvasSpec) -> tuple[float, float, float, float]:
         """Top-center keep-out box matching the compositor's title cartouche."""
@@ -407,14 +481,15 @@ class PlanBuilder:
         return min(base_radius, max(self.MIN_WARP_RADIUS, 2.0 * nn))
 
     def _fit_warp(self, source: SourceData, cam: ObliqueCamera, geo_norm):
-        """Demand-driven separable cartogram fit.
+        """Bounded-plateau cartogram fit.
 
-        Each POI contributes a Gaussian density bump weighted by how much room
-        its sprite needs (tier) and narrowed to how tightly it clusters, so
-        dense areas inflate and empty stretches compress. A global gain is
-        raised (then sprites shrunk) to minimise the POIs the warp cannot place
-        honestly; any sprite still more than the residual threshold from its
-        true point gets a leader line. Returns (warp, sprite_scale, residual_px,
+        POIs are grouped by proximity; each dense cluster becomes a flat-topped
+        magnification *plateau* over its (capped) extent, scaled to claim a
+        fixed fraction of each axis. The constant-density interior makes the
+        warp affine there, so roads through metro Phoenix stay straight; the
+        whole metro (incl. the east valley) zooms uniformly rather than the
+        empty desert between it and far outliers. POIs the bounded zoom can't
+        separate get leader lines. Returns (warp, sprite_scale, residual_px,
         coincident_count[=leader count]).
         """
         sprite_pois = [p for p in source.pois if p.feature_type != "river"]
@@ -422,67 +497,55 @@ class PlanBuilder:
             return IdentityWarp(), 1.0, 0.0, 0
 
         centers = [geo_norm((p.longitude, p.latitude)) for p in sprite_pois]
-        base_radius = _cluster_radius(centers)
-        base_demand = tier_demand(2)
-        weights = [tier_demand(p.tier) / base_demand for p in sprite_pois]
-        radii = [self._poi_radius(i, centers, base_radius) for i in range(len(centers))]
+
+        bands_x: list[tuple[float, float, float]] = []
+        bands_y: list[tuple[float, float, float]] = []
+        for members in _cluster_indices(centers, self.WARP_LINK_DIST):
+            if len(members) < 2:
+                continue
+            xs = [centers[i][0] for i in members]
+            ys = [centers[i][1] for i in members]
+            if max(max(xs) - min(xs), max(ys) - min(ys)) < self.MIN_PLATEAU_EXTENT:
+                continue
+            cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+            hx = min((max(xs) - min(xs)) / 2, self.MAX_HALF_BAND)
+            hy = min((max(ys) - min(ys)) / 2, self.MAX_HALF_BAND)
+            bands_x.append((cx - hx, cx + hx, _plateau_weight(2 * hx, self.WARP_TARGET_FRACTION)))
+            bands_y.append((cy - hy, cy + hy, _plateau_weight(2 * hy, self.WARP_TARGET_FRACTION)))
+
+        if bands_x:
+            warp: IdentityWarp | ImportanceWarp = ImportanceWarp(
+                centers=[], strength=1.0, bands=(bands_x, bands_y)
+            )
+        else:
+            warp = IdentityWarp()
 
         threshold = self.MAX_RESIDUAL_FRACTION * self.canvas.width_px
-        gain = self.distortion_strength
         sprite_scale = 1.0
-        # Search the warp schedule (strengthen, then shrink sprites) and keep
-        # the config needing the FEWEST leader lines, then the gentlest warp. A
-        # POI is leadered when, after the warp and overlap solving, its sprite
-        # still sits more than `threshold` from its true point: the warp could
-        # not place it honestly, so a connector makes the offset explicit.
-        best: tuple | None = None
-        for _ in range(14):
-            warp = ImportanceWarp(
-                centers=centers,
-                strength=gain,
-                radius=base_radius,
-                weights=weights,
-                radii=radii,
+        slots = []
+        for poi, center in zip(sprite_pois, centers):
+            u, v = warp.warp_point(center)
+            flat = (u * cam.flat_width, v * cam.flat_height)
+            slot = PoiSlot(
+                id=poi.id,
+                name=poi.name,
+                anchor=cam.project_point(flat),
+                width_px=0,
+                height_px=0,
+                tier=poi.tier,
+                feature_type=poi.feature_type,
             )
-            slots = []
-            for poi, center in zip(sprite_pois, centers):
-                u, v = warp.warp_point(center)
-                flat = (u * cam.flat_width, v * cam.flat_height)
-                slot = PoiSlot(
-                    id=poi.id,
-                    name=poi.name,
-                    anchor=cam.project_point(flat),
-                    width_px=0,
-                    height_px=0,
-                    tier=poi.tier,
-                    feature_type=poi.feature_type,
-                )
-                slots.append(
-                    sized_slot(slot, self.canvas.width_px, cam.scale_at(flat[1]), sprite_scale)
-                )
-            resolved = resolve_poi_overlaps(slots, self.canvas.width_px, self.canvas.height_px)
-            displaced = [
-                ((s.anchor[0] - r.anchor[0]) ** 2 + (s.anchor[1] - r.anchor[1]) ** 2) ** 0.5
-                for s, r in zip(slots, resolved)
-            ]
-            leader_count = sum(1 for d in displaced if d > threshold)
-            residual = max((d for d in displaced if d <= threshold), default=0.0)
-            key = (leader_count, gain)  # fewest leaders, then gentlest warp
-            if best is None or key < best[0]:
-                best = (key, warp, sprite_scale, residual, leader_count, gain)
-            if leader_count == 0:
-                break
-            if gain < self.MAX_WARP_GAIN:
-                gain = min(self.MAX_WARP_GAIN, gain * 1.6)
-            elif sprite_scale > self.MIN_SPRITE_SCALE:
-                sprite_scale = max(self.MIN_SPRITE_SCALE, sprite_scale * 0.85)
-            else:
-                break
-        _, warp, sprite_scale, residual, coincident_count, gain = best
+            slots.append(sized_slot(slot, self.canvas.width_px, cam.scale_at(flat[1]), sprite_scale))
+        resolved = resolve_poi_overlaps(slots, self.canvas.width_px, self.canvas.height_px)
+        displaced = [
+            ((s.anchor[0] - r.anchor[0]) ** 2 + (s.anchor[1] - r.anchor[1]) ** 2) ** 0.5
+            for s, r in zip(slots, resolved)
+        ]
+        coincident_count = sum(1 for d in displaced if d > threshold)
+        residual = max((d for d in displaced if d <= threshold), default=0.0)
         logger.info(
-            "Warp fit: gain %.2f, sprite scale %.2f, residual %.0fpx, %d leader POIs",
-            gain,
-            sprite_scale,
+            "Warp fit (plateau): %d bands, residual %.0fpx, %d leader POIs",
+            len(bands_x),
             residual,
             coincident_count,
         )

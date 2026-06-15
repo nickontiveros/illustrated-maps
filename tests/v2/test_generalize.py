@@ -85,6 +85,29 @@ def test_minor_and_unnamed_waterways_dropped():
     assert [r.name for r in rivers] == ["Salt River"]
 
 
+def test_rivers_capped_to_longest_and_fragments_dropped():
+    # Eight long major rivers + one short fragment of a kept river. Only the few
+    # longest names survive, and the short disconnected fragment is dropped so
+    # the river never reads as wash spaghetti.
+    def river(name, lon, length_deg):
+        return SourceRoad(
+            cls=RoadClass.RIVER,
+            coords=[(lon, 33.0), (lon, 33.0 + length_deg)],
+            name=name,
+        )
+
+    rivers = [river(f"Number {i} River", -112.0 + 0.1 * i, 0.5 - 0.01 * i) for i in range(8)]
+    rivers.append(river("Number 0 River", -110.0, 0.01))  # tiny fragment of a kept river
+    src = SourceData(region=BIG, roads=rivers)
+    generalize_source(src, BIG)
+    kept = [r for r in src.roads if r.cls is RoadClass.RIVER]
+    names = {r.name for r in kept}
+    assert len(names) <= 6  # capped to the longest few
+    assert "Number 0 River" in names  # the longest survives
+    # ...but its tiny disconnected fragment was dropped, not drawn.
+    assert all(r.coords[-1][1] - r.coords[0][1] > 0.02 for r in kept)
+
+
 def test_small_region_keeps_detail():
     # A city-scale region must not have its small ponds stripped.
     small = RegionBBox(north=40.78, south=40.70, east=-73.95, west=-74.02)

@@ -147,6 +147,8 @@ def assign_leader_lines(
     slots: list[PoiSlot],
     leader_threshold_px: float,
     max_uncross_iterations: int = 40,
+    canvas_width_px: int | None = None,
+    canvas_height_px: int | None = None,
 ) -> list[PoiSlot]:
     """Tag dishonestly-placed POIs for leader lines and tidy the connectors.
 
@@ -166,7 +168,17 @@ def assign_leader_lines(
     slots = [s.model_copy() for s in slots]
     for s in slots:
         true_pt = s.leader_anchor if s.leader_anchor is not None else s.anchor
-        dx, dy = s.anchor[0] - true_pt[0], s.anchor[1] - true_pt[1]
+        # Measure displacement against the on-canvas-*clamped* true point. A
+        # sprite shifted only because its true point sits past the canvas edge
+        # was clamped to stay visible (an honest, necessary move), not pushed by
+        # a real coincidence -- so it must not earn a spurious leader.
+        ref = true_pt
+        if canvas_width_px is not None and canvas_height_px is not None:
+            ref = (
+                min(canvas_width_px - s.width_px / 2, max(s.width_px / 2, true_pt[0])),
+                min(float(canvas_height_px), max(s.height_px, true_pt[1])),
+            )
+        dx, dy = s.anchor[0] - ref[0], s.anchor[1] - ref[1]
         if (dx * dx + dy * dy) ** 0.5 > leader_threshold_px:
             s.leader_anchor = true_pt
             s.offset = True

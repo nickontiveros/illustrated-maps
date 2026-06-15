@@ -74,6 +74,10 @@ class V2Project(BaseModel):
     style: StyleSpec = Field(default_factory=StyleSpec)
     distortion_strength: float = 0.5
     seed: int = 7
+    # Road rendering: "full" warps the whole network; "minimal" keeps only key
+    # interstates/US routes + major rivers, drawn straight (good for warped
+    # regional posters until the composition editor exists).
+    road_treatment: str = "full"
     # Compass bearing of poster-up: 0 = north-up, 340 = tilted toward NW.
     # "auto" picks the bearing that best fits the POI cloud to the canvas.
     rotation_deg: Union[float, Literal["auto"]] = 0.0
@@ -342,6 +346,7 @@ def build_plan(project: V2Project, source: SourceData) -> PlanDocument:
         style=project.style,
         distortion_strength=project.distortion_strength,
         seed=project.seed,
+        road_treatment=project.road_treatment,
     )
     plan = builder.build(source, title=project.display_title, frame=frame)
     plan.frame = frame.to_dict()

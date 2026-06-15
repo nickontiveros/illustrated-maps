@@ -23,10 +23,15 @@ from .types import GroundClass, RoadClass, RegionBBox
 # Names that are never worth a label on a tourist poster.
 _JUNK_WATER = re.compile(r"\b(tank|stock pond|dry lake|sewage|settling|detention)\b", re.I)
 # Minor man-made waterways -- irrigation plumbing, not scenic rivers.
-_MINOR_WATERWAY = re.compile(r"\b(ditch|lateral|wash|drain|sluice)\b", re.I)
+_MINOR_WATERWAY = re.compile(r"\b(ditch|lateral|wash|drain|sluice|canal|aqueduct|channel)\b", re.I)
+# At regional scale only the named *rivers* read as scenic water; everything
+# else (canals, washes, creeks) is clutter. Keep features whose name says river.
+_RIVER_NAME = re.compile(r"\briver\b", re.I)
 
 # Below this region area, keep full detail (city / small-region posters).
 _GENERALIZE_MIN_KM2 = 2_000.0
+# Only the few longest major rivers survive at regional scale.
+_MAX_RIVERS = 6
 
 
 def _poly_km2(coords: list[tuple[float, float]]) -> float:
@@ -159,7 +164,7 @@ def generalize_source(source: SourceData, region: RegionBBox) -> SourceData:
     # is far bigger than one worth drawing on a city map.
     keep_km2 = max(0.05, area * 2.5e-6)  # drop water smaller than this
     label_km2 = max(0.5, area * 1.5e-5)  # only label water at least this big
-    river_min_km = max(2.0, (area ** 0.5) * 0.02)  # drop washes shorter than this
+    river_min_km = max(12.0, (area ** 0.5) * 0.045)  # only long major rivers survive
 
     # --- Water polygons: drop tiny tanks; relabel only notable named water ---
     kept_ground: list[SourcePolygon] = []
@@ -183,13 +188,25 @@ def generalize_source(source: SourceData, region: RegionBBox) -> SourceData:
     for name, (_, c) in sorted(best_by_name.items(), key=lambda kv: kv[1][0], reverse=True)[:25]:
         source.places.append(SourcePlace(name=name, latitude=c[1], longitude=c[0], kind="water"))
 
-    # --- River/waterway lines: keep notable named rivers, drop wash spaghetti ---
-    kept_roads: list[SourceRoad] = []
+    # --- River lines: keep only the few longest major named rivers ---
+    river_len: dict[str, float] = defaultdict(float)
     for r in source.roads:
-        if r.cls is RoadClass.RIVER:
-            if not r.name or _MINOR_WATERWAY.search(r.name) or _line_km(r.coords) < river_min_km:
-                continue
-        kept_roads.append(r)
+        if r.cls is RoadClass.RIVER and r.name and _RIVER_NAME.search(r.name) and not _MINOR_WATERWAY.search(r.name):
+            river_len[r.name] += _line_km(r.coords)
+    keep_rivers = {
+        name
+        for name, km in sorted(river_len.items(), key=lambda kv: kv[1], reverse=True)[:_MAX_RIVERS]
+        if km >= river_min_km
+    }
+    # A major river is often mapped as dozens of disconnected runs; the short
+    # fragments read as wash spaghetti. Keep only the substantial runs.
+    river_seg_min_km = river_min_km * 0.25
+    kept_roads: list[SourceRoad] = [
+        r
+        for r in source.roads
+        if r.cls is not RoadClass.RIVER
+        or (r.name in keep_rivers and _line_km(r.coords) >= river_seg_min_km)
+    ]
     source.roads = kept_roads
 
     return source
