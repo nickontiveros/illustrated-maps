@@ -15,7 +15,7 @@ import {
   type WarpRegion,
 } from '@/api/v2';
 
-export type EditorMode = 'select' | 'warp' | 'poi' | 'roads';
+export type EditorMode = 'select' | 'warp' | 'poi' | 'roads' | 'labels';
 export type SelectableLayer = 'roads' | 'rivers' | 'pois' | 'places';
 export type RoadTreatment = 'warped' | 'straight' | 'hidden';
 export type RegionCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -54,6 +54,9 @@ interface EditorState {
   movePoi: (id: string, offset: [number, number]) => void;
   resizePoi: (id: string, factor: number) => void;
   cyclePoiLeader: (id: string) => void;
+
+  moveLabel: (key: string, uv: [number, number]) => void;
+  resetLabel: (key: string) => void;
 
   selectRoad: (id: string | null) => void;
   roadTreatment: (id: string) => RoadTreatment;
@@ -209,6 +212,16 @@ export const useEditor = create<EditorState>((set, get) => {
       applyEdit((draft) => {
         const ov = (draft.pois[id] ??= { leader: 'auto', label_side: 'auto' });
         ov.leader = ov.leader === 'auto' ? 'force' : ov.leader === 'force' ? 'suppress' : 'auto';
+      }),
+
+    moveLabel: (key, uv) =>
+      applyEdit((draft) => {
+        draft.labels.overrides[key] = uv;
+      }),
+
+    resetLabel: (key) =>
+      applyEdit((draft) => {
+        delete draft.labels.overrides[key];
       }),
 
     selectRoad: (id) => set({ selectedRoadId: id }),

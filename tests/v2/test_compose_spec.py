@@ -10,6 +10,7 @@ from mapgen.v2.compose_spec import (
     COMPOSITION_FILENAME,
     CompositionSpec,
     FeatureSpec,
+    LabelOverrides,
     LayerSelect,
     PoiOverride,
     RoadOverride,
@@ -248,6 +249,16 @@ def test_road_routing_hidden_drops_road(source):
     spec = CompositionSpec(roads={rid: RoadOverride(treatment="hidden")})
     plan = PlanBuilder(canvas=CANVAS, spec=spec).build(source)
     assert all(r.id != rid for r in plan.roads)
+
+
+def test_label_override_moves_poi_label(source):
+    base = PlanBuilder(canvas=CANVAS).build(source)
+    poi_lab = next(l for l in base.labels if l.kind.value == 'poi')
+    pid = next(p.id for p in source.pois if p.name == poi_lab.text)
+    spec = CompositionSpec(labels=LabelOverrides(overrides={pid: (0.5, 0.5)}))
+    moved = PlanBuilder(canvas=CANVAS, spec=spec).build(source)
+    m = next(l for l in moved.labels if l.kind.value == 'poi' and l.text == poi_lab.text)
+    assert m.baseline[0] != poi_lab.baseline[0]  # the label was repositioned
 
 
 def test_road_reshape_follows_straight_polyline():

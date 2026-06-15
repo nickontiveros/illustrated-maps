@@ -25,6 +25,7 @@ const MODES: { id: EditorMode; label: string; hint: string }[] = [
   { id: 'warp', label: 'Warp', hint: 'Drag on the map to draw a magnify region; click one to edit.' },
   { id: 'poi', label: 'POIs', hint: 'Drag a POI to nudge it; click to select and resize.' },
   { id: 'roads', label: 'Roads', hint: 'Click a road to route it: warped / straight / hidden, or reshape its path.' },
+  { id: 'labels', label: 'Labels', hint: 'Drag a label to place it by hand; double-click to reset.' },
 ];
 
 function MapEditorV2() {
@@ -35,7 +36,14 @@ function MapEditorV2() {
   // panning never re-renders the (thousands of) feature elements.
   const view = useRef({ scale: 1, tx: 0, ty: 0 });
   const drag = useRef<null | {
-    kind: 'region-new' | 'region-move' | 'region-resize' | 'poi-move' | 'reshape-vertex' | 'pan';
+    kind:
+      | 'region-new'
+      | 'region-move'
+      | 'region-resize'
+      | 'poi-move'
+      | 'reshape-vertex'
+      | 'label-move'
+      | 'pan';
     start: [number, number];
     target?: string;
     origin?: [number, number];
@@ -166,6 +174,8 @@ function MapEditorV2() {
       ed.updateReshapeVertex(d.target, d.index, [round(n[0]), round(n[1])]);
     } else if (d.kind === 'region-resize' && d.target && d.corner) {
       ed.resizeRegionCorner(d.target, d.corner, [round(n[0]), round(n[1])]);
+    } else if (d.kind === 'label-move' && d.target) {
+      ed.moveLabel(d.target, [round(n[0]), round(n[1])]);
     }
   };
   const onPointerUp = (e: React.PointerEvent) => {
@@ -191,6 +201,15 @@ function MapEditorV2() {
   const selectedRoad = ed.selectedRoadId
     ? src.roads.find((r) => r.id === ed.selectedRoadId) ?? null
     : null;
+  // Editable labels (POIs + cities/water), keyed by source-feature id. Road
+  // labels are omitted for now (only a handful of roads get one).
+  const labelMarkers =
+    ed.mode === 'labels'
+      ? [
+          ...src.pois.map((p) => ({ key: p.id, text: p.name, nat: p.point })),
+          ...src.places.map((p) => ({ key: p.id, text: p.name, nat: p.point })),
+        ]
+      : [];
 
   return (
     <Shell id={id}>
@@ -466,6 +485,36 @@ function MapEditorV2() {
                 </g>
               );
             })}
+            {/* editable labels */}
+            {labelMarkers.map((m) => {
+              const ov = spec.labels.overrides[m.key];
+              const [lx, ly] = px((ov ?? m.nat)[0], (ov ?? m.nat)[1]);
+              return (
+                <text
+                  key={`lbl-${m.key}`}
+                  x={lx}
+                  y={ly}
+                  fontSize={13}
+                  textAnchor="middle"
+                  fill={ov ? '#dc2626' : '#1f2937'}
+                  stroke="#fff"
+                  strokeWidth={3}
+                  paintOrder="stroke"
+                  style={{ cursor: 'grab', userSelect: 'none' }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    drag.current = { kind: 'label-move', target: m.key, start: toNorm(e.clientX, e.clientY) };
+                    (e.target as Element).setPointerCapture?.(e.pointerId);
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    ed.resetLabel(m.key);
+                  }}
+                >
+                  {m.text}
+                </text>
+              );
+            })}
             </g>
           </svg>
         </div>
@@ -608,6 +657,19 @@ function Inspector({
             Reset position
           </button>
         )}
+      </div>
+    );
+  }
+  if (ed.mode === 'labels') {
+    const n = Object.keys(ed.spec?.labels.overrides ?? {}).length;
+    return (
+      <div className="space-y-2 p-3 text-sm">
+        <div className="font-semibold">Labels</div>
+        <p className="text-xs text-gray-500">
+          Drag a POI or city label to place it by hand. Double-click a moved (red) label to reset
+          it. Watch the preview for the warped result.
+        </p>
+        <div className="text-xs text-gray-400">{n} hand-placed</div>
       </div>
     );
   }

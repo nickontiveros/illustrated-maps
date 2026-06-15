@@ -27,6 +27,7 @@ from ..types import (
     CanvasSpec,
     GroundClass,
     GroundPolygon,
+    LabelKind,
     PlanDocument,
     Point,
     PoiSlot,
@@ -367,6 +368,43 @@ class PlanBuilder:
             water_names,
             title=title or "Untitled Map",
         )
+        # Hand-placed label overrides. Each generated label is resolved back to
+        # its *source feature id* (the editor keys overrides by that stable id,
+        # not by the post-layout text, which is uppercased/reformatted). A
+        # matched label is moved to the user's normalized anchor -- warped +
+        # projected like everything else -- translating the whole baseline so a
+        # curved road label keeps its shape.
+        overrides = self.spec.labels.overrides
+        if overrides:
+            slot_by_name = {s.name: s.id for s in slots}
+            place_by_upper = {p.name.upper(): p.id for p in source.places if p.kind == "district"}
+            water_by_name = {p.name: p.id for p in source.places if p.kind == "water"}
+            road_by_ref = {r.ref: r.id for r in roads if r.ref}
+            road_by_name = {r.name: r.id for r in roads if r.name}
+
+            def _source_id(lab):
+                if lab.kind is LabelKind.POI:
+                    return slot_by_name.get(lab.text)
+                if lab.kind is LabelKind.DISTRICT:
+                    return place_by_upper.get(lab.text)
+                if lab.kind is LabelKind.WATER:
+                    return water_by_name.get(lab.text)
+                if lab.kind is LabelKind.SHIELD:
+                    return road_by_ref.get(lab.text)
+                if lab.kind is LabelKind.STREET:
+                    return road_by_name.get(lab.text)
+                return None
+
+            for lab in labels:
+                sid = _source_id(lab)
+                uv = overrides.get(sid) if sid else None
+                if not uv or not lab.baseline:
+                    continue
+                wu, wv = warp.warp_point((uv[0], uv[1]))
+                tx, ty = cam.project_point((wu * cam.flat_width, wv * cam.flat_height))
+                bx, by = lab.baseline[0]
+                dx, dy = tx - bx, ty - by
+                lab.baseline = [(p[0] + dx, p[1] + dy) for p in lab.baseline]
 
         # --- Manifest ---
         ground_classes = {g.cls for g in ground} | {GroundClass.LAND}

@@ -90,6 +90,10 @@ class PoiOverride(BaseModel):
 
 class LabelOverrides(BaseModel):
     title_anchor_uv: Optional[tuple[float, float]] = None
+    # Hand-placed labels, keyed by "<kind>:<text>" (e.g. "poi:Phoenix Sky
+    # Harbor", "district:Phoenix"); value is the normalized anchor the label
+    # should move to. Matched against the generated labels after layout.
+    overrides: dict[str, tuple[float, float]] = Field(default_factory=dict)
 
 
 class CompositionSpec(BaseModel):

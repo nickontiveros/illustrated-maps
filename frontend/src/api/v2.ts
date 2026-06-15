@@ -138,7 +138,10 @@ export interface CompositionSpec {
   features: FeatureSpec;
   roads: Record<string, RoadOverride>;
   pois: Record<string, PoiOverride>;
-  labels: { title_anchor_uv?: [number, number] | null };
+  labels: {
+    title_anchor_uv?: [number, number] | null;
+    overrides: Record<string, [number, number]>; // source-feature id -> normalized anchor
+  };
 }
 
 // --- Source feed (normalized frame space) ---------------------------------
