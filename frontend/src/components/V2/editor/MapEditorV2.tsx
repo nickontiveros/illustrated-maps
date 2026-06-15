@@ -31,11 +31,12 @@ function MapEditorV2() {
   const { id = '' } = useParams();
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<null | {
-    kind: 'region-new' | 'region-move' | 'poi-move' | 'reshape-vertex';
+    kind: 'region-new' | 'region-move' | 'region-resize' | 'poi-move' | 'reshape-vertex';
     start: [number, number];
     target?: string;
     origin?: [number, number];
     index?: number;
+    corner?: import('./editorStore').RegionCorner;
   }>(null);
 
   const project = useQuery({ queryKey: ['v2-project', id], queryFn: () => v2api.getProject(id), enabled: !!id });
@@ -106,6 +107,8 @@ function MapEditorV2() {
       ]);
     } else if (d.kind === 'reshape-vertex' && d.target && d.index != null) {
       ed.updateReshapeVertex(d.target, d.index, [round(n[0]), round(n[1])]);
+    } else if (d.kind === 'region-resize' && d.target && d.corner) {
+      ed.resizeRegionCorner(d.target, d.corner, [round(n[0]), round(n[1])]);
     }
   };
   const onPointerUp = (e: React.PointerEvent) => {
@@ -327,41 +330,75 @@ function MapEditorV2() {
             {spec.warp.regions.map((r) => {
               const [x0, y0] = px(r.bounds[0], r.bounds[1]);
               const [x1, y1] = px(r.bounds[2], r.bounds[3]);
-              const selected = ed.selectedRegionId === r.id;
+              const selected = ed.mode === 'warp' && ed.selectedRegionId === r.id;
+              const corners: [import('./editorStore').RegionCorner, number, number][] = [
+                ['nw', r.bounds[0], r.bounds[1]],
+                ['ne', r.bounds[2], r.bounds[1]],
+                ['sw', r.bounds[0], r.bounds[3]],
+                ['se', r.bounds[2], r.bounds[3]],
+              ];
               return (
-                <rect
-                  key={r.id}
-                  x={Math.min(x0, x1)}
-                  y={Math.min(y0, y1)}
-                  width={Math.abs(x1 - x0)}
-                  height={Math.abs(y1 - y0)}
-                  fill="#6366f1"
-                  fillOpacity={selected ? 0.18 : 0.1}
-                  stroke="#6366f1"
-                  strokeWidth={selected ? 2 : 1}
-                  strokeDasharray="6 3"
-                  // Only interactive in warp mode -- otherwise the box would
-                  // swallow clicks meant for the POIs / roads underneath it.
-                  pointerEvents={ed.mode === 'warp' ? 'auto' : 'none'}
-                  className={ed.mode === 'warp' ? 'cursor-move' : ''}
-                  onClick={(e) => {
-                    if (ed.mode !== 'warp') return;
-                    e.stopPropagation();
-                    ed.selectRegion(r.id);
-                  }}
-                  onPointerDown={(e) => {
-                    if (ed.mode !== 'warp') return;
-                    e.stopPropagation();
-                    ed.selectRegion(r.id);
-                    drag.current = {
-                      kind: 'region-move',
-                      target: r.id,
-                      start: toNorm(e.clientX, e.clientY),
-                      origin: [Math.min(r.bounds[0], r.bounds[2]), Math.min(r.bounds[1], r.bounds[3])],
-                    };
-                    (e.target as Element).setPointerCapture?.(e.pointerId);
-                  }}
-                />
+                <g key={r.id}>
+                  <rect
+                    x={Math.min(x0, x1)}
+                    y={Math.min(y0, y1)}
+                    width={Math.abs(x1 - x0)}
+                    height={Math.abs(y1 - y0)}
+                    fill="#6366f1"
+                    fillOpacity={selected ? 0.18 : 0.1}
+                    stroke="#6366f1"
+                    strokeWidth={selected ? 2 : 1}
+                    strokeDasharray="6 3"
+                    // Only interactive in warp mode -- otherwise the box would
+                    // swallow clicks meant for the POIs / roads underneath it.
+                    pointerEvents={ed.mode === 'warp' ? 'auto' : 'none'}
+                    className={ed.mode === 'warp' ? 'cursor-move' : ''}
+                    onClick={(e) => {
+                      if (ed.mode !== 'warp') return;
+                      e.stopPropagation();
+                      ed.selectRegion(r.id);
+                    }}
+                    onPointerDown={(e) => {
+                      if (ed.mode !== 'warp') return;
+                      e.stopPropagation();
+                      ed.selectRegion(r.id);
+                      drag.current = {
+                        kind: 'region-move',
+                        target: r.id,
+                        start: toNorm(e.clientX, e.clientY),
+                        origin: [Math.min(r.bounds[0], r.bounds[2]), Math.min(r.bounds[1], r.bounds[3])],
+                      };
+                      (e.target as Element).setPointerCapture?.(e.pointerId);
+                    }}
+                  />
+                  {selected &&
+                    corners.map(([corner, cu, cv]) => {
+                      const [hx, hy] = px(cu, cv);
+                      return (
+                        <rect
+                          key={corner}
+                          x={hx - 6}
+                          y={hy - 6}
+                          width={12}
+                          height={12}
+                          fill="#fff"
+                          stroke="#6366f1"
+                          strokeWidth={2}
+                          style={{ cursor: 'nwse-resize' }}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            drag.current = {
+                              kind: 'region-resize',
+                              target: r.id,
+                              corner,
+                              start: toNorm(e.clientX, e.clientY),
+                            };
+                            (e.target as Element).setPointerCapture?.(e.pointerId);
+                          }}
+                        />
+                      );
+                    })}
+                </g>
               );
             })}
           </svg>
