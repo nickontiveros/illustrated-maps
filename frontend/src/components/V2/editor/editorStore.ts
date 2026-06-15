@@ -15,8 +15,9 @@ import {
   type WarpRegion,
 } from '@/api/v2';
 
-export type EditorMode = 'select' | 'warp' | 'poi';
+export type EditorMode = 'select' | 'warp' | 'poi' | 'roads';
 export type SelectableLayer = 'roads' | 'rivers' | 'pois' | 'places';
+export type RoadTreatment = 'warped' | 'straight' | 'hidden';
 
 interface EditorState {
   projectId: string | null;
@@ -25,6 +26,7 @@ interface EditorState {
   mode: EditorMode;
   selectedRegionId: string | null;
   selectedPoiId: string | null;
+  selectedRoadId: string | null;
   preview: PreviewPlanResult | null;
   previewing: boolean;
   dirty: boolean;
@@ -50,6 +52,13 @@ interface EditorState {
   movePoi: (id: string, offset: [number, number]) => void;
   resizePoi: (id: string, factor: number) => void;
   cyclePoiLeader: (id: string) => void;
+
+  selectRoad: (id: string | null) => void;
+  roadTreatment: (id: string) => RoadTreatment;
+  setRoadTreatment: (id: string, treatment: RoadTreatment) => void;
+  beginReshape: (id: string, points: [number, number][]) => void;
+  updateReshapeVertex: (id: string, index: number, uv: [number, number]) => void;
+  clearReshape: (id: string) => void;
 
   save: () => Promise<void>;
 }
@@ -90,6 +99,7 @@ export const useEditor = create<EditorState>((set, get) => {
     mode: 'select',
     selectedRegionId: null,
     selectedPoiId: null,
+    selectedRoadId: null,
     preview: null,
     previewing: false,
     dirty: false,
@@ -105,6 +115,7 @@ export const useEditor = create<EditorState>((set, get) => {
         mode: 'select',
         selectedRegionId: null,
         selectedPoiId: null,
+        selectedRoadId: null,
         preview: null,
         dirty: false,
         error: null,
@@ -115,7 +126,8 @@ export const useEditor = create<EditorState>((set, get) => {
     reset: () =>
       set({ projectId: null, spec: null, source: null, preview: null, dirty: false }),
 
-    setMode: (mode) => set({ mode, selectedRegionId: null, selectedPoiId: null }),
+    setMode: (mode) =>
+      set({ mode, selectedRegionId: null, selectedPoiId: null, selectedRoadId: null }),
 
     edit: (mutate) => applyEdit(mutate),
 
@@ -183,6 +195,36 @@ export const useEditor = create<EditorState>((set, get) => {
       applyEdit((draft) => {
         const ov = (draft.pois[id] ??= { leader: 'auto', label_side: 'auto' });
         ov.leader = ov.leader === 'auto' ? 'force' : ov.leader === 'force' ? 'suppress' : 'auto';
+      }),
+
+    selectRoad: (id) => set({ selectedRoadId: id }),
+
+    roadTreatment: (id) => get().spec?.roads[id]?.treatment ?? 'warped',
+
+    setRoadTreatment: (id, treatment) =>
+      applyEdit((draft) => {
+        const ov = (draft.roads[id] ??= { treatment: 'warped', reshape: null });
+        ov.treatment = treatment;
+        if (treatment !== 'straight') ov.reshape = null; // reshape only applies when straight
+      }),
+
+    beginReshape: (id, points) =>
+      applyEdit((draft) => {
+        const ov = (draft.roads[id] ??= { treatment: 'straight', reshape: null });
+        ov.treatment = 'straight';
+        ov.reshape = points.map((p) => [...p] as [number, number]);
+      }),
+
+    updateReshapeVertex: (id, index, uv) =>
+      applyEdit((draft) => {
+        const ov = draft.roads[id];
+        if (ov?.reshape && ov.reshape[index]) ov.reshape[index] = uv;
+      }),
+
+    clearReshape: (id) =>
+      applyEdit((draft) => {
+        const ov = draft.roads[id];
+        if (ov) ov.reshape = null;
       }),
 
     save: async () => {

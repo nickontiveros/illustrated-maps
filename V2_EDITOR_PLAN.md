@@ -210,14 +210,16 @@ a planned project.
 - **Not yet:** region resize handles (only draw + move + magnify), `label_side`
   UI, and the richer auto-seed (auto plateaus → editable regions).
 
-### Phase D — Road routing
-- Select a road → treatment (warped / straight / hidden); optional vertex
-  reshape to "trail US 60 off to the side" (→ `roads[id].reshape`, projected
-  straight).
-- Retires the global `road_treatment` flag to a mere seed; full manual road
-  composition.
-- Tests: per-road treatment overrides the global default; a reshaped road
-  follows its spec polyline; hidden roads drop from the plan.
+### Phase D — Road routing — ✅ DONE (commit pending)
+- **Roads** mode in `MapEditorV2`: click a road → inspector sets treatment
+  (warped / straight / hidden) and **Reshape path** (drag red vertex handles to
+  redraw the centerline → `roads[id].reshape`, drawn straight). Backend
+  (`_build_roads`/`_straight_road`, per-road override) landed in Phase A and is
+  unit-tested; smoke-tested on AZ (hide drops a segment; reshape → 2-pt road).
+- Per-road treatment overrides the global default; full manual road composition.
+- **Caveat:** OSM splits a highway into many segments (I-10 = 24 in the AZ
+  feed), so reshape/treatment act per-segment, not per-route. Reshape the
+  segment(s) near the area you're fixing.
 
 ---
 
