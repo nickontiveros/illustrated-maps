@@ -172,14 +172,43 @@ def make_frame(project: V2Project) -> "GeoFrame":
     return GeoFrame(project.region, rotation_deg=float(rotation), target_aspect=target_aspect)
 
 
+# Road classes worth editing on a poster. Washes/arroyos (STREAM) and, at
+# regional+ scale, residential LOCAL roads are clutter -- excluded from the
+# editor feed so the canvas stays light (a state extract has ~64k washes).
+_EDITABLE_ROADS_BASE = {"motorway", "primary", "secondary", "river", "rail"}
+_EDITOR_ROAD_CAP = 3000  # safety cap on roads served (longest kept)
+
+
+def _decimate(pts: list, max_pts: int = 40) -> list:
+    """Thin a polyline for display (endpoints always kept)."""
+    if len(pts) <= max_pts:
+        return pts
+    step = (len(pts) - 1) / (max_pts - 1)
+    idx = sorted({round(i * step) for i in range(max_pts)} | {len(pts) - 1})
+    return [pts[i] for i in idx]
+
+
 def source_to_normalized(source: SourceData, frame: "GeoFrame") -> dict:
-    """Project the source features into normalized frame space (0..1) for the
-    layout editor: warp-independent coordinates with stable ids, so the user
-    can pick features and draw warp regions over the true geography."""
+    """Project the *editable* source features into normalized frame space
+    (0..1) for the layout editor: warp-independent coordinates with stable ids,
+    simplified and filtered to the features a user actually composes (not the
+    full OSM network). ``counts`` reports what was shown vs. total per layer so
+    nothing is silently dropped."""
 
     def nm(coord):
         u, v = frame.to_normalized((coord[0], coord[1]))
         return [round(u, 5), round(v, 5)]
+
+    detail = source.provenance.get("detail_level", "full")
+    editable = set(_EDITABLE_ROADS_BASE)
+    if detail not in ("regional", "country"):
+        editable.add("local")  # city-scale posters do compose on local streets
+
+    candidates = [r for r in source.roads if r.cls.value in editable]
+    roads_total = len(source.roads)
+    capped = len(candidates) > _EDITOR_ROAD_CAP
+    if capped:
+        candidates = sorted(candidates, key=lambda r: -len(r.coords))[:_EDITOR_ROAD_CAP]
 
     roads = [
         {
@@ -187,12 +216,17 @@ def source_to_normalized(source: SourceData, frame: "GeoFrame") -> dict:
             "cls": r.cls.value,
             "name": r.name,
             "ref": r.ref,
-            "points": [nm(c) for c in r.coords],
+            "points": [nm(c) for c in _decimate(r.coords)],
         }
-        for r in source.roads
+        for r in candidates
     ]
     ground = [
-        {"id": g.id, "cls": g.cls.value, "name": g.name, "exterior": [nm(c) for c in g.exterior]}
+        {
+            "id": g.id,
+            "cls": g.cls.value,
+            "name": g.name,
+            "exterior": [nm(c) for c in _decimate(g.exterior, 60)],
+        }
         for g in source.ground
     ]
     pois = [
@@ -209,7 +243,21 @@ def source_to_normalized(source: SourceData, frame: "GeoFrame") -> dict:
         {"id": p.id, "name": p.name, "kind": p.kind, "point": nm((p.longitude, p.latitude))}
         for p in source.places
     ]
-    return {"frame": frame.to_dict(), "roads": roads, "ground": ground, "pois": pois, "places": places}
+    return {
+        "frame": frame.to_dict(),
+        "roads": roads,
+        "ground": ground,
+        "pois": pois,
+        "places": places,
+        "counts": {
+            "roads_shown": len(roads),
+            "roads_total": roads_total,
+            "roads_capped": capped,
+            "ground": len(ground),
+            "pois": len(pois),
+            "places": len(places),
+        },
+    }
 
 
 def detail_level_for(region: RegionBBox) -> str:

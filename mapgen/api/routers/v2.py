@@ -328,14 +328,29 @@ def put_composition(project_id: str, spec: CompositionSpec) -> dict:
     return {"saved": True, "version": spec.version}
 
 
+# Cache the parsed source per project (keyed by mtime): a state extract is
+# ~100 MB of JSON, far too slow to re-parse on every keystroke-debounced
+# preview. build_plan's mutations on the source are idempotent, so reuse is safe.
+_source_cache: dict[str, tuple[float, object]] = {}
+
+
+def _cached_source(directory):
+    src_path = directory / SOURCE_FILENAME
+    if not src_path.exists():
+        raise HTTPException(404, "No source yet; run the plan stage first")
+    mtime = src_path.stat().st_mtime
+    cached = _source_cache.get(str(directory))
+    if cached is None or cached[0] != mtime:
+        cached = (mtime, load_source(src_path))
+        _source_cache[str(directory)] = cached
+    return cached[1]
+
+
 @router.get("/{project_id}/source.geojson")
 def get_source_geojson(project_id: str) -> dict:
     """Source features in normalized frame space for the layout editor."""
     project, directory = _load_project(project_id)
-    src_path = directory / SOURCE_FILENAME
-    if not src_path.exists():
-        raise HTTPException(404, "No source yet; run the plan stage first")
-    source = load_source(src_path)
+    source = _cached_source(directory)
     return pipeline.source_to_normalized(source, pipeline.make_frame(project))
 
 
@@ -344,10 +359,7 @@ def preview_plan(project_id: str, spec: CompositionSpec) -> dict:
     """Apply an in-flight spec to the cached source and return a preview SVG.
     No OSM fetch, no AI, no persistence -- drives the editor's live preview."""
     project, directory = _load_project(project_id)
-    src_path = directory / SOURCE_FILENAME
-    if not src_path.exists():
-        raise HTTPException(404, "No source yet; run the plan stage first")
-    source = load_source(src_path)
+    source = _cached_source(directory)
     document = pipeline.build_plan(project, source, spec=spec)
     warp_fit = document.provenance.get("warp_fit", {})
     return {

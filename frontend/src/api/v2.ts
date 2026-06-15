@@ -175,6 +175,14 @@ export interface SourceGeojson {
   ground: SourceGroundFeature[];
   pois: SourcePoiFeature[];
   places: SourcePlaceFeature[];
+  counts: {
+    roads_shown: number;
+    roads_total: number;
+    roads_capped: boolean;
+    ground: number;
+    pois: number;
+    places: number;
+  };
 }
 
 export interface PreviewPlanResult {

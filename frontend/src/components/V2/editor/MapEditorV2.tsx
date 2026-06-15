@@ -141,6 +141,12 @@ function MapEditorV2() {
           </button>
         ))}
         <span className="ml-2 text-xs text-gray-500">{MODES.find((m) => m.id === ed.mode)?.hint}</span>
+        {src.counts && src.counts.roads_shown < src.counts.roads_total && (
+          <span className="text-[11px] text-gray-400">
+            (showing {src.counts.roads_shown} editable of {src.counts.roads_total} roads; washes/minor
+            roads hidden)
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-3">
           {ed.previewing && <span className="text-xs text-gray-400">previewing…</span>}
           {ed.error && <span className="text-xs text-red-500">{ed.error}</span>}
