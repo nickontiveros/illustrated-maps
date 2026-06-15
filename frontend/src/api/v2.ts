@@ -91,6 +91,98 @@ export interface V2Asset {
   flagged: boolean;
 }
 
+// --- Composition spec (the editable layout document) ----------------------
+
+export interface WarpRegion {
+  id: string;
+  label?: string | null;
+  bounds: [number, number, number, number]; // u0, v0, u1, v1 (normalized)
+  magnify: number;
+}
+
+export interface WarpSpec {
+  mode: 'auto' | 'manual' | 'off';
+  regions: WarpRegion[];
+}
+
+export interface LayerSelect {
+  default: 'auto' | 'all' | 'none';
+  include: string[];
+  exclude: string[];
+}
+
+export interface FeatureSpec {
+  roads: LayerSelect;
+  rivers: LayerSelect;
+  pois: LayerSelect;
+  places: LayerSelect;
+}
+
+export interface RoadOverride {
+  treatment: 'warped' | 'straight' | 'hidden';
+  reshape?: [number, number][] | null;
+}
+
+export interface PoiOverride {
+  size?: number | null;
+  tier?: number | null;
+  offset_uv?: [number, number] | null;
+  leader: 'auto' | 'force' | 'suppress';
+  label_side: 'auto' | 'left' | 'right' | 'above' | 'below';
+}
+
+export interface CompositionSpec {
+  version: string;
+  seeded_from: 'heuristics' | 'manual';
+  warp: WarpSpec;
+  features: FeatureSpec;
+  roads: Record<string, RoadOverride>;
+  pois: Record<string, PoiOverride>;
+  labels: { title_anchor_uv?: [number, number] | null };
+}
+
+// --- Source feed (normalized frame space) ---------------------------------
+
+export interface SourceRoadFeature {
+  id: string;
+  cls: string;
+  name?: string | null;
+  ref?: string | null;
+  points: [number, number][];
+}
+export interface SourceGroundFeature {
+  id: string;
+  cls: string;
+  name?: string | null;
+  exterior: [number, number][];
+}
+export interface SourcePoiFeature {
+  id: string;
+  name: string;
+  tier: number;
+  feature_type: string;
+  point: [number, number];
+}
+export interface SourcePlaceFeature {
+  id: string;
+  name: string;
+  kind: string;
+  point: [number, number];
+}
+export interface SourceGeojson {
+  frame: Record<string, unknown>;
+  roads: SourceRoadFeature[];
+  ground: SourceGroundFeature[];
+  pois: SourcePoiFeature[];
+  places: SourcePlaceFeature[];
+}
+
+export interface PreviewPlanResult {
+  svg: string;
+  warnings: string[];
+  coincident_count: number;
+}
+
 class V2ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -210,6 +302,30 @@ export const v2api = {
       headers: headers(true),
       body: JSON.stringify({ flagged }),
     }).then((r) => handle<{ x: number; y: number; status: string }>(r)),
+
+  getComposition: (id: string) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/composition`, { headers: headers() }).then(
+      (r) => handle<CompositionSpec>(r)
+    ),
+
+  putComposition: (id: string, spec: CompositionSpec) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/composition`, {
+      method: 'PUT',
+      headers: headers(true),
+      body: JSON.stringify(spec),
+    }).then((r) => handle<{ saved: boolean; version: string }>(r)),
+
+  getSourceGeojson: (id: string) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/source.geojson`, {
+      headers: headers(),
+    }).then((r) => handle<SourceGeojson>(r)),
+
+  previewPlan: (id: string, spec: CompositionSpec) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/preview-plan`, {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify(spec),
+    }).then((r) => handle<PreviewPlanResult>(r)),
 
   previewUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/preview.svg`,
   posterUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/poster`,

@@ -160,13 +160,23 @@ function ProjectViewV2() {
           }
           job={status?.plan}
           action={
-            <button
-              onClick={() => startPlan.mutate()}
-              disabled={anyRunning}
-              className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {project.has_plan ? 'Re-plan' : 'Build plan'}
-            </button>
+            <div className="flex items-center gap-2">
+              {project.has_plan && (
+                <Link
+                  to={`/v2/${id}/edit`}
+                  className="px-3 py-1.5 bg-slate-100 text-slate-700 text-sm rounded-lg hover:bg-slate-200"
+                >
+                  Edit layout
+                </Link>
+              )}
+              <button
+                onClick={() => startPlan.mutate()}
+                disabled={anyRunning}
+                className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {project.has_plan ? 'Re-plan' : 'Build plan'}
+              </button>
+            </div>
           }
         />
 

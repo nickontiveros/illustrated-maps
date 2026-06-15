@@ -188,21 +188,27 @@ a planned project.
   default returned by `GET /composition` is the starting draft (everything
   visible, warp auto) — the editor toggles from there.
 
-### Phase B — Feature-selection UI
-- `GET /source.geojson` + `POST /preview-plan`; `MapEditorV2` renders source
-  layers; click-to-toggle include/exclude; live preview; save.
-- Delivers the highest-value, simplest workflow: **pick what appears** (drop a
-  minor wash, hide a redundant US route, remove a town label).
-- Tests: geojson endpoint shape/normalization; `preview-plan` determinism &
-  no-persist; (component) toggle mutates spec and re-previews.
+### Phase B — Feature-selection UI — ✅ DONE (commit pending)
+- Backend `GET /source.geojson` + `POST /preview-plan` + source persistence
+  (`source.json`) — ✅ committed (`7e315e84`). Frontend `MapEditorV2` (SVG
+  viewport, normalized space) with **Select** mode: click roads/rivers/POIs/
+  places to toggle include/exclude; live preview via `preview-plan`; Save via
+  `PUT /composition`.
+- Delivers the **pick what appears** workflow (drop a minor wash, hide a
+  redundant US route, remove a town label).
+- Backend tested (geojson normalization + ids, preview no-persist). Frontend
+  type-checks + bundles; needs a browser smoke test.
 
-### Phase C — Warp + POI direct manipulation
-- Draw/drag/resize warp-region rectangles (→ `warp.regions`, `mode="manual"`);
-  drag POIs (→ `offset_uv`), resize (→ `size`), toggle leader, set label side.
-- This is where "give Mesa more room" and "make the airport bigger" become
-  direct gestures instead of constants.
-- Tests: a region magnifies its interior in the resulting plan; POI
-  offset/size/tier/leader overrides honored; warp stays fold-safe (separable).
+### Phase C — Warp + POI direct manipulation — ✅ DONE (commit pending)
+- Same `MapEditorV2`, additional modes: **Warp** — drag to draw a magnify
+  region, move it, magnify slider (→ `warp.regions`, `mode="manual"`), delete.
+  **POIs** — drag to nudge (→ `offset_uv`), ± resize (→ `size`), cycle leader
+  (auto/force/suppress). Live preview shows the warped result.
+- This is where "give Mesa more room" and "make the airport bigger" are direct
+  gestures. The spec backend (warp manual, POI overrides) landed in Phase A and
+  is unit-tested; the UI drives it.
+- **Not yet:** region resize handles (only draw + move + magnify), `label_side`
+  UI, and the richer auto-seed (auto plateaus → editable regions).
 
 ### Phase D — Road routing
 - Select a road → treatment (warped / straight / hidden); optional vertex
