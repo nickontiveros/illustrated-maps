@@ -30,14 +30,27 @@ const MODES: { id: EditorMode; label: string; hint: string }[] = [
 function MapEditorV2() {
   const { id = '' } = useParams();
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const gRef = useRef<SVGGElement | null>(null);
+  // Pan/zoom lives in a ref + imperative transform on the content group, so
+  // panning never re-renders the (thousands of) feature elements.
+  const view = useRef({ scale: 1, tx: 0, ty: 0 });
   const drag = useRef<null | {
-    kind: 'region-new' | 'region-move' | 'region-resize' | 'poi-move' | 'reshape-vertex';
+    kind: 'region-new' | 'region-move' | 'region-resize' | 'poi-move' | 'reshape-vertex' | 'pan';
     start: [number, number];
     target?: string;
     origin?: [number, number];
     index?: number;
     corner?: import('./editorStore').RegionCorner;
   }>(null);
+
+  const applyTransform = () => {
+    const { scale, tx, ty } = view.current;
+    gRef.current?.setAttribute('transform', `translate(${tx} ${ty}) scale(${scale})`);
+  };
+  const resetView = () => {
+    view.current = { scale: 1, tx: 0, ty: 0 };
+    applyTransform();
+  };
 
   const project = useQuery({ queryKey: ['v2-project', id], queryFn: () => v2api.getProject(id), enabled: !!id });
   const composition = useQuery({ queryKey: ['v2-composition', id], queryFn: () => v2api.getComposition(id), enabled: !!id });
@@ -54,12 +67,41 @@ function MapEditorV2() {
   const aspect = out ? out.height_px / out.width_px : 1.414;
   const VBH = VBW * aspect;
 
-  // viewport <-> normalized helpers
-  const toNorm = (clientX: number, clientY: number): [number, number] => {
+  // viewport <-> normalized helpers (account for pan/zoom transform)
+  const toVB = (clientX: number, clientY: number): [number, number] => {
     const rect = svgRef.current!.getBoundingClientRect();
-    return [(clientX - rect.left) / rect.width, (clientY - rect.top) / rect.height];
+    return [((clientX - rect.left) / rect.width) * VBW, ((clientY - rect.top) / rect.height) * VBH];
+  };
+  const toNorm = (clientX: number, clientY: number): [number, number] => {
+    const [vbx, vby] = toVB(clientX, clientY);
+    const { scale, tx, ty } = view.current;
+    return [(vbx - tx) / scale / VBW, (vby - ty) / scale / VBH];
   };
   const px = (u: number, v: number): [number, number] => [u * VBW, v * VBH];
+
+  // Native wheel listener (passive:false so we can preventDefault) -- attaches
+  // once the canvas mounts (ready) and zooms toward the cursor.
+  const ready = !!ed.spec && !!ed.source;
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const vbx = ((e.clientX - rect.left) / rect.width) * VBW;
+      const vby = ((e.clientY - rect.top) / rect.height) * VBH;
+      const v = view.current;
+      const ns = Math.max(1, Math.min(24, v.scale * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      const real = ns / v.scale;
+      v.tx = vbx - (vbx - v.tx) * real;
+      v.ty = vby - (vby - v.ty) * real;
+      v.scale = ns;
+      applyTransform();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, VBH]);
 
   if (source.isError || composition.isError) {
     return (
@@ -83,14 +125,29 @@ function MapEditorV2() {
 
   // --- pointer handling on the canvas ---
   const onPointerDown = (e: React.PointerEvent) => {
-    if (ed.mode !== 'warp') return;
-    const n = toNorm(e.clientX, e.clientY);
-    drag.current = { kind: 'region-new', start: n };
+    if (ed.mode === 'warp') {
+      drag.current = { kind: 'region-new', start: toNorm(e.clientX, e.clientY) };
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      return;
+    }
+    // Background drag in non-warp modes pans the canvas.
+    drag.current = {
+      kind: 'pan',
+      start: toVB(e.clientX, e.clientY),
+      origin: [view.current.tx, view.current.ty],
+    };
     (e.target as Element).setPointerCapture?.(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d) return;
+    if (d.kind === 'pan' && d.origin) {
+      const vb = toVB(e.clientX, e.clientY);
+      view.current.tx = d.origin[0] + (vb[0] - d.start[0]);
+      view.current.ty = d.origin[1] + (vb[1] - d.start[1]);
+      applyTransform();
+      return;
+    }
     const n = toNorm(e.clientX, e.clientY);
     if (d.kind === 'region-move' && d.target && d.origin) {
       const r = spec.warp.regions.find((x) => x.id === d.target);
@@ -158,6 +215,10 @@ function MapEditorV2() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-3">
+          <span className="text-[11px] text-gray-400">scroll = zoom · drag = pan</span>
+          <button onClick={resetView} className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-700">
+            Reset view
+          </button>
           {ed.previewing && <span className="text-xs text-gray-400">previewing…</span>}
           {ed.error && <span className="text-xs text-red-500">{ed.error}</span>}
           <span className={`text-xs ${ed.dirty ? 'text-amber-600' : 'text-gray-400'}`}>
@@ -184,6 +245,10 @@ function MapEditorV2() {
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
           >
+            <g
+              ref={gRef}
+              transform={`translate(${view.current.tx} ${view.current.ty}) scale(${view.current.scale})`}
+            >
             {/* ground */}
             {src.ground.map((g) => (
               <polygon
@@ -401,6 +466,7 @@ function MapEditorV2() {
                 </g>
               );
             })}
+            </g>
           </svg>
         </div>
 
