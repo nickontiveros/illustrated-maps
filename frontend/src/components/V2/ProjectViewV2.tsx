@@ -531,6 +531,7 @@ function PoiEditor({
   // null = not editing; the saved config is the source of truth until then.
   const [draft, setDraft] = useState<V2Poi[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [geocoding, setGeocoding] = useState<number | null>(null);
   const pois = draft ?? project.config.pois;
   const region = project.config.region;
 
@@ -547,6 +548,20 @@ function PoiEditor({
 
   const edit = (i: number, patch: Partial<V2Poi>) =>
     setDraft(pois.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const lookup = async (i: number, name: string) => {
+    if (!name.trim()) return;
+    setGeocoding(i);
+    setError(null);
+    try {
+      const r = await v2api.geocode(name);
+      const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+      edit(i, { lat: round4(r.lat), lon: round4(r.lon), feature_type: r.feature_type });
+    } catch (e) {
+      setError(`Couldn't locate "${name}": ${(e as Error).message}`);
+    } finally {
+      setGeocoding(null);
+    }
+  };
   const add = () =>
     setDraft([
       ...pois,
@@ -580,13 +595,27 @@ function PoiEditor({
       <div className="space-y-2 mb-3">
         {pois.map((poi, i) => (
           <div key={i} className="grid grid-cols-[1fr_110px_110px_80px_24px] gap-2 items-center">
-            <input
-              value={poi.name}
-              onChange={(e) => edit(i, { name: e.target.value })}
-              placeholder="Name"
-              disabled={disabled}
-              className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
-            />
+            <div className="flex gap-1">
+              <input
+                value={poi.name}
+                onChange={(e) => edit(i, { name: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') lookup(i, poi.name);
+                }}
+                placeholder="Name"
+                disabled={disabled}
+                className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => lookup(i, poi.name)}
+                disabled={disabled || geocoding === i || !poi.name.trim()}
+                title="Look up coordinates by name"
+                className="px-2 rounded-lg border border-slate-300 text-sm hover:bg-slate-50 disabled:opacity-40"
+              >
+                {geocoding === i ? '…' : '🔍'}
+              </button>
+            </div>
             <input
               type="number"
               step="0.0001"

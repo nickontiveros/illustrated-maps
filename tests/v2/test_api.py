@@ -119,6 +119,20 @@ def test_composition_round_trip_and_applied_to_plan(client, project_payload):
     assert "maritime_museum" in ids
 
 
+def test_geocode_endpoint(client, monkeypatch, project_payload):
+    monkeypatch.setattr(
+        pipeline,
+        "geocode_place",
+        lambda q: {"query": q, "lat": 33.43, "lon": -112.01, "feature_type": "airport", "display_name": "PHX"},
+    )
+    r = client.get("/api/v2/projects/geocode", params={"q": "Phoenix Sky Harbor"})
+    assert r.status_code == 200 and r.json()["feature_type"] == "airport"
+    assert client.get("/api/v2/projects/geocode", params={"q": "  "}).status_code == 400
+    # a real project id still resolves (no collision with the /geocode literal)
+    pid = _create(client, project_payload)
+    assert client.get(f"/api/v2/projects/{pid}").status_code == 200
+
+
 def test_asset_prompt_override(client, project_payload):
     project_id = _create(client, project_payload)
     client.post(f"/api/v2/projects/{project_id}/plan")

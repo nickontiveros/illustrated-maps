@@ -223,6 +223,19 @@ def create_project(project: pipeline.V2Project) -> dict:
     return _summary(project_id)
 
 
+@router.get("/geocode")
+def geocode(q: str) -> dict:
+    """Look up a place by name -> coordinates + feature_type, for the POI form.
+    Declared before /{project_id} so the literal path wins."""
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(400, "Empty query")
+    try:
+        return pipeline.geocode_place(q)
+    except Exception as exc:  # noqa: BLE001 -- surface geocoder failures cleanly
+        raise HTTPException(404, f"No match for {q!r} ({type(exc).__name__})") from exc
+
+
 @router.get("/{project_id}")
 def get_project(project_id: str) -> dict:
     project, _ = _load_project(project_id)

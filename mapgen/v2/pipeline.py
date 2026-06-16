@@ -260,6 +260,44 @@ def source_to_normalized(source: SourceData, frame: "GeoFrame") -> dict:
     }
 
 
+# OSM class/type -> our POI feature_type (drives sprite sizing + landform hints).
+_GEOCODE_FEATURE_TYPE = {
+    ("aeroway", "aerodrome"): "airport",
+    ("amenity", "university"): "campus",
+    ("amenity", "college"): "campus",
+    ("leisure", "stadium"): "stadium",
+    ("leisure", "park"): "park",
+    ("leisure", "nature_reserve"): "park",
+    ("boundary", "national_park"): "park",
+    ("natural", "peak"): "mountain",
+    ("natural", "wood"): "forest",
+    ("landuse", "forest"): "forest",
+    ("tourism", "zoo"): "zoo",
+}
+
+
+def geocode_place(query: str) -> dict:
+    """Look up a place by name (Nominatim via osmnx, HTTP-cached) and return a
+    POI-ready record: coordinates + a best-guess feature_type. Raises on miss."""
+    import osmnx as ox
+
+    gdf = ox.geocoder.geocode_to_gdf(query)  # raises if nothing matches
+    row = gdf.iloc[0]
+    centroid = row.geometry.centroid
+    cls, typ = str(row.get("class", "")), str(row.get("type", ""))
+    feature_type = _GEOCODE_FEATURE_TYPE.get((cls, typ), "building")
+    dn = row.get("display_name")
+    return {
+        "query": query,
+        "display_name": str(dn) if dn is not None else None,  # osmnx returns numpy types
+        "lat": float(centroid.y),
+        "lon": float(centroid.x),
+        "feature_type": feature_type,
+        "osm_class": cls,
+        "osm_type": typ,
+    }
+
+
 def detail_level_for(region: RegionBBox) -> str:
     area = region.area_km2
     for limit, tier in DETAIL_TIERS:

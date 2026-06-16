@@ -325,6 +325,20 @@ export const v2api = {
       body: JSON.stringify({ flagged }),
     }).then((r) => handle<{ x: number; y: number; status: string }>(r)),
 
+  geocode: (q: string) =>
+    fetch(`${API_BASE}/projects/geocode?q=${encodeURIComponent(q)}`, { headers: headers() }).then(
+      (r) =>
+        handle<{
+          query: string;
+          display_name: string | null;
+          lat: number;
+          lon: number;
+          feature_type: string;
+          osm_class: string;
+          osm_type: string;
+        }>(r)
+    ),
+
   getComposition: (id: string) =>
     fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/composition`, { headers: headers() }).then(
       (r) => handle<CompositionSpec>(r)
