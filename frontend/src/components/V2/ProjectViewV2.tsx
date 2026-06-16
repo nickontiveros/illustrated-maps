@@ -55,9 +55,17 @@ function ProjectViewV2() {
     },
   });
   const startAssets = useMutation({
-    mutationFn: (only_ids?: string[]) => v2api.startAssets(id, { stub: useStub, only_ids, force: !!only_ids }),
+    mutationFn: (opts?: { only_ids?: string[]; prompt_overrides?: Record<string, string> }) =>
+      v2api.startAssets(id, {
+        stub: useStub,
+        only_ids: opts?.only_ids,
+        force: !!opts?.only_ids,
+        prompt_overrides: opts?.prompt_overrides,
+      }),
     onSettled: refresh,
   });
+  const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
+  const [promptOpen, setPromptOpen] = useState<string | null>(null);
   const startCompose = useMutation({
     mutationFn: () => v2api.startCompose(id, { scale, harmonize }),
     onSettled: refresh,
@@ -315,7 +323,7 @@ function ProjectViewV2() {
             </h2>
             {flaggedIds.length > 0 && (
               <button
-                onClick={() => startAssets.mutate(flaggedIds)}
+                onClick={() => startAssets.mutate({ only_ids: flaggedIds })}
                 disabled={anyRunning}
                 className="px-3 py-1.5 bg-amber-600 text-white text-xs rounded-lg hover:bg-amber-700 disabled:opacity-50"
               >
@@ -377,7 +385,16 @@ function ProjectViewV2() {
                       </button>
                     )}
                     <button
-                      onClick={() => startAssets.mutate([asset.id])}
+                      onClick={() => setPromptOpen(promptOpen === asset.id ? null : asset.id)}
+                      className={`text-[10px] hover:text-slate-700 ${
+                        asset.prompt_overridden ? 'text-indigo-600' : 'text-slate-400'
+                      }`}
+                      title="Edit this asset's prompt"
+                    >
+                      {asset.prompt_overridden ? '✎ prompt*' : '✎ prompt'}
+                    </button>
+                    <button
+                      onClick={() => startAssets.mutate({ only_ids: [asset.id] })}
                       disabled={anyRunning}
                       className="text-[10px] text-indigo-600 hover:text-indigo-800 disabled:opacity-40"
                       title="Regenerate just this asset"
@@ -386,6 +403,33 @@ function ProjectViewV2() {
                     </button>
                   </div>
                 </div>
+                {promptOpen === asset.id && (
+                  <div className="mt-2 border-t pt-2">
+                    <textarea
+                      value={promptDrafts[asset.id] ?? asset.prompt_hints}
+                      onChange={(e) =>
+                        setPromptDrafts((d) => ({ ...d, [asset.id]: e.target.value }))
+                      }
+                      rows={3}
+                      className="w-full rounded border border-slate-200 p-1 text-[10px]"
+                      placeholder="Describe this sprite/texture…"
+                    />
+                    <button
+                      onClick={() =>
+                        startAssets.mutate({
+                          only_ids: [asset.id],
+                          prompt_overrides: {
+                            [asset.id]: promptDrafts[asset.id] ?? asset.prompt_hints,
+                          },
+                        })
+                      }
+                      disabled={anyRunning}
+                      className="mt-1 w-full rounded bg-indigo-600 px-2 py-1 text-[10px] text-white disabled:opacity-40"
+                    >
+                      Regenerate with this prompt
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>

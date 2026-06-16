@@ -371,10 +371,33 @@ def preview_plan(project_id: str, spec: CompositionSpec) -> dict:
     }
 
 
+ASSET_OVERRIDES_FILENAME = "asset_overrides.json"
+
+
+def _load_asset_overrides(directory) -> dict:
+    path = directory / ASSET_OVERRIDES_FILENAME
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _apply_asset_overrides(manifest, overrides: dict) -> None:
+    """Swap in user-edited prompt_hints; the new prompt changes the asset's
+    content hash, so it regenerates and the cache marks the old one stale."""
+    for spec in manifest:
+        if spec.id in overrides:
+            spec.prompt_hints = overrides[spec.id]
+
+
 class AssetsRequest(BaseModel):
     stub: bool = False
     force: bool = False
     only_ids: Optional[list[str]] = None
+    # asset id -> edited prompt_hints; persisted and applied on regenerate.
+    prompt_overrides: Optional[dict[str, str]] = None
 
 
 @router.post("/{project_id}/assets", status_code=202)
@@ -385,6 +408,13 @@ def start_assets(project_id: str, req: AssetsRequest, background: BackgroundTask
         raise HTTPException(409, "A stage is already running")
 
     api_key = request.headers.get("X-Google-API-Key")
+
+    # Persist any newly-edited prompts, then apply all overrides to the manifest.
+    overrides = _load_asset_overrides(directory)
+    if req.prompt_overrides:
+        overrides.update({k: v for k, v in req.prompt_overrides.items() if v is not None})
+        (directory / ASSET_OVERRIDES_FILENAME).write_text(json.dumps(overrides))
+    _apply_asset_overrides(document.manifest, overrides)
 
     def work() -> None:
         if req.stub:
@@ -398,7 +428,7 @@ def start_assets(project_id: str, req: AssetsRequest, background: BackgroundTask
         studio = pipeline.AssetStudio(generator, directory / pipeline.ASSETS_DIRNAME)
         studio.generate_all(
             document,
-            force=req.force,
+            force=req.force or bool(req.prompt_overrides),
             only_ids=set(req.only_ids) if req.only_ids else None,
             progress=lambda asset_id, i, total: jobs.update(
                 project_id, "assets", current=i, total=total, detail=asset_id
@@ -418,6 +448,8 @@ def list_assets(project_id: str) -> list[dict]:
     from ...v2.assets.stub import StubAssetGenerator
 
     studio = AssetStudio(StubAssetGenerator(), studio_dir)  # generator unused for cache checks
+    overrides = _load_asset_overrides(directory)
+    _apply_asset_overrides(document.manifest, overrides)
     out = []
     for spec in document.manifest:
         meta = studio.read_meta(spec.id)
@@ -431,6 +463,9 @@ def list_assets(project_id: str) -> list[dict]:
                 "palette_score": meta.get("palette_score"),
                 "palette_outlier": meta.get("palette_outlier", False),
                 "flagged": meta.get("flagged", False),
+                # the editable prompt clause + whether the user has customized it
+                "prompt_hints": spec.prompt_hints,
+                "prompt_overridden": spec.id in overrides,
             }
         )
     return out

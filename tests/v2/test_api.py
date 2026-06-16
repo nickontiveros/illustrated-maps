@@ -119,6 +119,31 @@ def test_composition_round_trip_and_applied_to_plan(client, project_payload):
     assert "maritime_museum" in ids
 
 
+def test_asset_prompt_override(client, project_payload):
+    project_id = _create(client, project_payload)
+    client.post(f"/api/v2/projects/{project_id}/plan")
+    client.post(f"/api/v2/projects/{project_id}/assets", json={"stub": True})
+
+    assets = client.get(f"/api/v2/projects/{project_id}/assets").json()
+    target = assets[0]
+    assert "prompt_hints" in target and target["prompt_overridden"] is False
+
+    # Edit one asset's prompt and regenerate just it.
+    resp = client.post(
+        f"/api/v2/projects/{project_id}/assets",
+        json={"stub": True, "only_ids": [target["id"]], "prompt_overrides": {target["id"]: "a bright red barn"}},
+    )
+    assert resp.status_code == 202
+
+    after = client.get(f"/api/v2/projects/{project_id}/assets").json()
+    edited = next(a for a in after if a["id"] == target["id"])
+    assert edited["prompt_hints"] == "a bright red barn"
+    assert edited["prompt_overridden"] is True
+    # The override persists (a fresh list still shows it).
+    assert next(a for a in client.get(f"/api/v2/projects/{project_id}/assets").json()
+                if a["id"] == target["id"])["prompt_overridden"] is True
+
+
 def test_source_geojson_and_preview_plan(client, project_payload):
     project_id = _create(client, project_payload)
     # Both editor endpoints need the persisted source from a plan run.

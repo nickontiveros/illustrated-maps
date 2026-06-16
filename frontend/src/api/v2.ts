@@ -89,6 +89,8 @@ export interface V2Asset {
   palette_score: number | null;
   palette_outlier: boolean;
   flagged: boolean;
+  prompt_hints: string;
+  prompt_overridden: boolean;
 }
 
 // --- Composition spec (the editable layout document) ----------------------
@@ -273,7 +275,15 @@ export const v2api = {
       (r) => handle<V2Asset[]>(r)
     ),
 
-  startAssets: (id: string, opts: { stub?: boolean; force?: boolean; only_ids?: string[] }) =>
+  startAssets: (
+    id: string,
+    opts: {
+      stub?: boolean;
+      force?: boolean;
+      only_ids?: string[];
+      prompt_overrides?: Record<string, string>;
+    }
+  ) =>
     fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/assets`, {
       method: 'POST',
       headers: headers(true),
