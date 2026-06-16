@@ -561,8 +561,12 @@ class PlanBuilder:
         edge. A road clipped by the frame may yield several in-frame pieces."""
         from shapely.geometry import LineString, box
 
-        m = canvas.width_px * 0.02  # keep clear of the decorative border
-        frame = box(m, m, canvas.width_px - m, canvas.height_px - m)
+        # Per-axis inset so the margin is even on a tall poster (a single
+        # width-based inset under-trims the top/bottom). Wide enough to clear
+        # the decorative border with room to spare.
+        mx = canvas.width_px * 0.03
+        my = canvas.height_px * 0.03
+        frame = box(mx, my, canvas.width_px - mx, canvas.height_px - my)
         out: list[RoadPath] = []
         for r in roads:
             if len(r.points) < 2:

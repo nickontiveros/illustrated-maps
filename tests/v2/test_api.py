@@ -119,6 +119,27 @@ def test_composition_round_trip_and_applied_to_plan(client, project_payload):
     assert "maritime_museum" in ids
 
 
+def test_apply_composition_rebuilds_plan_without_fetch(client, project_payload, monkeypatch):
+    project_id = _create(client, project_payload)
+    client.post(f"/api/v2/projects/{project_id}/plan")
+
+    # Prove apply-composition does NOT re-fetch OSM: make fetch_source explode.
+    def _boom(*a, **k):
+        raise AssertionError("apply-composition must not fetch OSM")
+
+    monkeypatch.setattr(pipeline, "fetch_source", _boom)
+
+    client.put(
+        f"/api/v2/projects/{project_id}/composition",
+        json={"features": {"pois": {"exclude": ["old_lighthouse"]}}},
+    )
+    r = client.post(f"/api/v2/projects/{project_id}/apply-composition")
+    assert r.status_code == 200 and r.json()["applied"] is True
+
+    plan = client.get(f"/api/v2/projects/{project_id}/plan").json()
+    assert "old_lighthouse" not in [p["id"] for p in plan["pois"]]
+
+
 def test_geocode_endpoint(client, monkeypatch, project_payload):
     monkeypatch.setattr(
         pipeline,

@@ -262,6 +262,9 @@ export const useEditor = create<EditorState>((set, get) => {
         const saved = clone(spec);
         saved.seeded_from = 'manual';
         await v2api.putComposition(projectId, saved);
+        // Rebuild plan.json + preview.svg from the cached source so the edit
+        // shows up on the main project page and in the next compose (no fetch).
+        await v2api.applyComposition(projectId);
         set({ spec: saved, dirty: false, saving: false, error: null });
       } catch (e) {
         set({ saving: false, error: String((e as Error)?.message ?? e) });

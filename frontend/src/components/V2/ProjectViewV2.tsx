@@ -17,7 +17,9 @@ function ProjectViewV2() {
   const [useStub, setUseStub] = useState(false);
   const [harmonize, setHarmonize] = useState(false);
   const [scale, setScale] = useState(0.25);
-  const [cacheBust, setCacheBust] = useState(0);
+  // Seed from mount time so returning from the editor re-fetches preview.svg /
+  // poster.png (which the apply/compose steps may have just rewritten).
+  const [cacheBust, setCacheBust] = useState(() => Date.now());
 
   const { data: project } = useQuery({
     queryKey: ['v2-project', id],
@@ -213,7 +215,11 @@ function ProjectViewV2() {
         {/* Stage 3: Compose */}
         <StageCard
           title="3 · Compose"
-          subtitle="Deterministic render at print DPI"
+          subtitle={
+            project.poster_stale
+              ? '⚠ Poster is out of date with the plan — re-compose to apply layout edits'
+              : 'Deterministic render at print DPI'
+          }
           job={status?.compose}
           action={
             <div className="flex items-center gap-3">

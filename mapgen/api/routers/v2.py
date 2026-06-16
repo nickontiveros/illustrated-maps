@@ -185,6 +185,11 @@ def _summary(project_id: str) -> dict:
     # The plan bakes in the project config (POIs, region, camera); a config
     # saved after the plan was built means the plan no longer reflects it.
     plan_stale = has_plan and (directory / "project.yaml").stat().st_mtime > plan_path.stat().st_mtime
+    # A poster built before the current plan (e.g. after a layout edit) no
+    # longer matches it -> prompt a re-compose.
+    poster_path = directory / pipeline.POSTER_FILENAME
+    has_poster = poster_path.exists()
+    poster_stale = has_poster and has_plan and plan_path.stat().st_mtime > poster_path.stat().st_mtime
     return {
         "id": project_id,
         "name": project.name,
@@ -192,7 +197,8 @@ def _summary(project_id: str) -> dict:
         "poi_count": len(project.pois),
         "has_plan": has_plan,
         "plan_stale": plan_stale,
-        "has_poster": (directory / pipeline.POSTER_FILENAME).exists(),
+        "has_poster": has_poster,
+        "poster_stale": poster_stale,
         "status": {k: v.model_dump() for k, v in jobs.status(project_id).items()},
     }
 
@@ -335,10 +341,26 @@ def get_composition(project_id: str) -> Response:
 
 @router.put("/{project_id}/composition")
 def put_composition(project_id: str, spec: CompositionSpec) -> dict:
-    """Persist an edited spec. Re-run the plan stage to apply it."""
+    """Persist an edited spec. Call apply-composition (or re-plan) to apply it."""
     _, directory = _load_project(project_id)
     spec.save(directory / COMPOSITION_FILENAME)
     return {"saved": True, "version": spec.version}
+
+
+@router.post("/{project_id}/apply-composition")
+def apply_composition(project_id: str) -> dict:
+    """Rebuild plan.json + preview.svg from the cached source + the saved
+    composition, WITHOUT re-fetching OSM -- so a layout edit shows up in the
+    main-page preview and the next compose immediately (re-plan only when the
+    region/POIs themselves change)."""
+    project, directory = _load_project(project_id)
+    if jobs.is_running(project_id):
+        raise HTTPException(409, "A stage is running")
+    source = _cached_source(directory)  # 404 if no plan has been run yet
+    spec = CompositionSpec.load_or_default(directory)
+    document = pipeline.build_plan(project, source, spec=spec)
+    pipeline.write_plan(document, directory)
+    return {"applied": True, "road_count": len(document.roads)}
 
 
 # Cache the parsed source per project (keyed by mtime): a state extract is

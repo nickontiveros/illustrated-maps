@@ -73,6 +73,7 @@ export interface V2ProjectSummary {
   has_plan: boolean;
   plan_stale: boolean;
   has_poster: boolean;
+  poster_stale: boolean;
   status: V2Status;
 }
 
@@ -350,6 +351,12 @@ export const v2api = {
       headers: headers(true),
       body: JSON.stringify(spec),
     }).then((r) => handle<{ saved: boolean; version: string }>(r)),
+
+  applyComposition: (id: string) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/apply-composition`, {
+      method: 'POST',
+      headers: headers(true),
+    }).then((r) => handle<{ applied: boolean; road_count: number }>(r)),
 
   getSourceGeojson: (id: string) =>
     fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/source.geojson`, {
