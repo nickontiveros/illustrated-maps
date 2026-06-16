@@ -366,6 +366,8 @@ def preview_plan(project_id: str, spec: CompositionSpec) -> dict:
         "svg": pipeline.plan_to_svg(document),
         "warnings": document.warnings,
         "coincident_count": warp_fit.get("coincident_count", 0),
+        # ids of features actually rendered, so the editor can match the preview
+        "road_ids": sorted({r.id for r in document.roads if r.id}),
     }
 
 

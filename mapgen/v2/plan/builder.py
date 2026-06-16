@@ -225,6 +225,10 @@ class PlanBuilder:
         roads = self._build_roads(
             source, cam, geo_norm, canvas, to_flat, simplify_tol, densify_px
         )
+        # Bird's-eye posters shouldn't have roads bleeding off the edges into
+        # the border ornament; clip every road to an inset of the canvas (a
+        # road may split into several in-frame pieces).
+        roads = self._clip_roads(roads, canvas)
 
         # --- Buildings (2.5D fabric) ---
         buildings: list[BuildingFootprint] = []
@@ -551,6 +555,29 @@ class PlanBuilder:
             depth=cam.depth(mid_y),
             id=road.id,
         )
+
+    def _clip_roads(self, roads: list["RoadPath"], canvas: CanvasSpec) -> list["RoadPath"]:
+        """Clip each road to an inset of the canvas so nothing bleeds off the
+        edge. A road clipped by the frame may yield several in-frame pieces."""
+        from shapely.geometry import LineString, box
+
+        m = canvas.width_px * 0.02  # keep clear of the decorative border
+        frame = box(m, m, canvas.width_px - m, canvas.height_px - m)
+        out: list[RoadPath] = []
+        for r in roads:
+            if len(r.points) < 2:
+                continue
+            clipped = LineString(r.points).intersection(frame)
+            if clipped.is_empty:
+                continue
+            geoms = clipped.geoms if clipped.geom_type == "MultiLineString" else [clipped]
+            for g in geoms:
+                if g.geom_type != "LineString" or g.length <= 0:
+                    continue
+                pts = [(float(x), float(y)) for x, y in g.coords]
+                if len(pts) >= 2:
+                    out.append(r.model_copy(update={"points": pts}))
+        return out
 
     def _warped_roads(
         self, roads_src, cam, canvas, to_flat, simplify_tol, densify_px

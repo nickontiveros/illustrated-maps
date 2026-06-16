@@ -192,6 +192,7 @@ export interface PreviewPlanResult {
   svg: string;
   warnings: string[];
   coincident_count: number;
+  road_ids: string[]; // ids of roads actually rendered in the preview
 }
 
 class V2ApiError extends Error {

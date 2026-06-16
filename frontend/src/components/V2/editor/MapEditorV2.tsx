@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { v2api } from '@/api/v2';
@@ -51,6 +51,11 @@ function MapEditorV2() {
     corner?: import('./editorStore').RegionCorner;
   }>(null);
 
+  // Dots/labels counter-scale by 1/zoom so they stay a constant screen size
+  // (zooming in then de-clutters by spreading positions, not enlarging marks).
+  const [markerScale, setMarkerScale] = useState(1);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
+
   const applyTransform = () => {
     const { scale, tx, ty } = view.current;
     gRef.current?.setAttribute('transform', `translate(${tx} ${ty}) scale(${scale})`);
@@ -58,6 +63,7 @@ function MapEditorV2() {
   const resetView = () => {
     view.current = { scale: 1, tx: 0, ty: 0 };
     applyTransform();
+    setMarkerScale(1);
   };
 
   const project = useQuery({ queryKey: ['v2-project', id], queryFn: () => v2api.getProject(id), enabled: !!id });
@@ -105,6 +111,7 @@ function MapEditorV2() {
       v.ty = vby - (vby - v.ty) * real;
       v.scale = ns;
       applyTransform();
+      setMarkerScale(1 / ns);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -210,6 +217,9 @@ function MapEditorV2() {
           ...src.places.map((p) => ({ key: p.id, text: p.name, nat: p.point })),
         ]
       : [];
+  // Which roads actually render (from the live preview): the editor matches it.
+  const renderedRoads = new Set(ed.preview?.road_ids ?? []);
+  const hasPreview = !!ed.preview;
 
   return (
     <Shell id={id}>
@@ -290,7 +300,9 @@ function MapEditorV2() {
               const geom = ov?.reshape ?? r.points;
               const pts = geom.map(([u, v]) => px(u, v).join(',')).join(' ');
               const hittable = ed.mode === 'select' || ed.mode === 'roads';
-              const dim = !visible || treatment === 'hidden';
+              // Match the preview: once we have one, a road is solid iff it is
+              // actually rendered there; otherwise it is a faint "available" ghost.
+              const dim = hasPreview ? !renderedRoads.has(r.id) : !visible || treatment === 'hidden';
               return (
                 <g key={r.id}>
                   <polyline
@@ -326,10 +338,10 @@ function MapEditorV2() {
                           key={i}
                           cx={hx}
                           cy={hy}
-                          r={7}
+                          r={7 * markerScale}
                           fill="#fff"
                           stroke="#dc2626"
-                          strokeWidth={2}
+                          strokeWidth={2 * markerScale}
                           className="cursor-grab"
                           onPointerDown={(e) => {
                             e.stopPropagation();
@@ -356,7 +368,7 @@ function MapEditorV2() {
                   key={p.id}
                   x={x}
                   y={y}
-                  fontSize={12}
+                  fontSize={12 * markerScale}
                   textAnchor="middle"
                   fill={visible ? '#6b5b3e' : '#bbb'}
                   pointerEvents={ed.mode === 'select' ? 'auto' : 'none'}
@@ -384,11 +396,11 @@ function MapEditorV2() {
                   <circle
                     cx={x}
                     cy={y}
-                    r={5 + 5 * size}
+                    r={(5 + 5 * size) * markerScale}
                     fill={visible ? (selected ? '#dc2626' : '#b45309') : '#ccc'}
                     fillOpacity={0.85}
                     stroke={selected ? '#dc2626' : '#7c4a02'}
-                    strokeWidth={selected ? 2 : 1}
+                    strokeWidth={(selected ? 2 : 1) * markerScale}
                     pointerEvents={ed.mode === 'select' || ed.mode === 'poi' ? 'auto' : 'none'}
                     className={ed.mode === 'select' || ed.mode === 'poi' ? 'cursor-pointer' : ''}
                     onClick={(e) => {
@@ -404,7 +416,13 @@ function MapEditorV2() {
                       (e.target as Element).setPointerCapture?.(e.pointerId);
                     }}
                   />
-                  <text x={x + 8} y={y + 4} fontSize={11} fill="#4b3f29" pointerEvents="none">
+                  <text
+                    x={x + 8 * markerScale}
+                    y={y + 4 * markerScale}
+                    fontSize={11 * markerScale}
+                    fill="#4b3f29"
+                    pointerEvents="none"
+                  >
                     {p.name}
                   </text>
                 </g>
@@ -461,13 +479,13 @@ function MapEditorV2() {
                       return (
                         <rect
                           key={corner}
-                          x={hx - 6}
-                          y={hy - 6}
-                          width={12}
-                          height={12}
+                          x={hx - 6 * markerScale}
+                          y={hy - 6 * markerScale}
+                          width={12 * markerScale}
+                          height={12 * markerScale}
                           fill="#fff"
                           stroke="#6366f1"
-                          strokeWidth={2}
+                          strokeWidth={2 * markerScale}
                           style={{ cursor: 'nwse-resize' }}
                           onPointerDown={(e) => {
                             e.stopPropagation();
@@ -494,11 +512,11 @@ function MapEditorV2() {
                   key={`lbl-${m.key}`}
                   x={lx}
                   y={ly}
-                  fontSize={13}
+                  fontSize={13 * markerScale}
                   textAnchor="middle"
                   fill={ov ? '#dc2626' : '#1f2937'}
                   stroke="#fff"
-                  strokeWidth={3}
+                  strokeWidth={3 * markerScale}
                   paintOrder="stroke"
                   style={{ cursor: 'grab', userSelect: 'none' }}
                   onPointerDown={(e) => {
@@ -520,17 +538,41 @@ function MapEditorV2() {
         </div>
 
         {/* Right column: inspector + live preview */}
-        <div className="flex w-80 flex-col border-l bg-white">
+        <div className="flex w-96 flex-col border-l bg-white">
           <Inspector
             selectedRegion={selectedRegion}
             selectedPoi={selectedPoi}
             selectedRoad={selectedRoad}
           />
           <div className="flex-1 overflow-auto border-t p-2">
-            <div className="mb-1 text-xs font-semibold text-gray-500">Live preview</div>
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-500">Live preview</span>
+              <span
+                className={`inline-block h-2.5 w-2.5 rounded-full ${
+                  ed.previewing
+                    ? 'animate-pulse bg-amber-400'
+                    : ed.preview
+                      ? 'bg-emerald-500'
+                      : 'bg-gray-300'
+                }`}
+                title={ed.previewing ? 'updating…' : ed.preview ? 'up to date' : 'not rendered yet'}
+              />
+              <span className="text-[11px] text-gray-400">
+                {ed.previewing ? 'updating…' : ed.preview ? 'up to date' : ''}
+              </span>
+              {ed.preview && (
+                <button
+                  onClick={() => setPreviewExpanded(true)}
+                  className="ml-auto rounded bg-gray-100 px-2 py-0.5 text-[11px] text-gray-700"
+                >
+                  ⤢ Expand
+                </button>
+              )}
+            </div>
             {ed.preview ? (
               <div
-                className="w-full [&>svg]:h-auto [&>svg]:w-full"
+                className="w-full cursor-zoom-in [&>svg]:h-auto [&>svg]:w-full"
+                onClick={() => setPreviewExpanded(true)}
                 dangerouslySetInnerHTML={{ __html: ed.preview.svg }}
               />
             ) : (
@@ -544,6 +586,30 @@ function MapEditorV2() {
           </div>
         </div>
       </div>
+
+      {/* Expanded preview overlay */}
+      {previewExpanded && ed.preview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+          onClick={() => setPreviewExpanded(false)}
+        >
+          <div
+            className="relative max-h-full overflow-auto rounded bg-white p-2 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setPreviewExpanded(false)}
+              className="absolute right-3 top-3 z-10 rounded bg-gray-800/80 px-2 py-1 text-xs text-white"
+            >
+              Close ✕
+            </button>
+            <div
+              className="[&>svg]:h-auto [&>svg]:max-h-[85vh] [&>svg]:w-auto"
+              dangerouslySetInnerHTML={{ __html: ed.preview.svg }}
+            />
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }
