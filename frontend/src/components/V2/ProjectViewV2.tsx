@@ -179,6 +179,15 @@ function ProjectViewV2() {
                   Edit layout
                 </Link>
               )}
+              {project.has_plan && (
+                <Link
+                  to={`/v2/${id}/edit-gl`}
+                  className="px-3 py-1.5 bg-violet-100 text-violet-700 text-sm rounded-lg hover:bg-violet-200"
+                  title="Experimental WebGL editor with live warp morphing"
+                >
+                  Try WebGL (beta)
+                </Link>
+              )}
               <button
                 onClick={() => startPlan.mutate()}
                 disabled={anyRunning}
