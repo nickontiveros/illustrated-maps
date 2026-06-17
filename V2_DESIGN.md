@@ -287,8 +287,25 @@ below the misalignment scale are taken from the AI image. Strength is a user dia
 
 ### 4.6 Export
 
-PNG at print resolution, layered PSD (reuse `psd_service` — the layer stack above maps
-1:1 to PSD layers), and DZI deep-zoom for the web viewer (reuse `dzi_service`).
+PNG at print resolution, layered PSD, and DZI deep-zoom for the web viewer (reuse
+`dzi_service`).
+
+**Layered PSD** (`mapgen v2 layered`, `pipeline.compose_layered`). The layer stack above
+maps to PSD layers, but with a deliberate split for hand-editing: the hard-to-edit
+surface — ground/water textures, the road network, 2.5D buildings and the atmospheric
+haze (layers 1–4, 6) — is pre-flattened into a single **Base** layer, while everything a
+user tweaks by hand is peeled into its own named, positioned layer: one per scatter sprite
+*kind*, one per POI sprite, the POI leader lines, one per text label, and the frame. So you
+can open the file in Photoshop/GIMP/Affinity and move the Empire State Building sprite,
+retype a street name, or hide all the trees, without disturbing the painted base. Paper
+grain is omitted (a global finish best re-applied to a flattened copy), so the canonical
+print output stays `poster.png`. `Compositor.render_layers()` produces the stack;
+`compose/psd_writer.py` writes the `.psd`.
+
+> Implementation note: the V1 API path used `pytoshop` (`services/psd_service.py`), but its
+> legacy `setup.py` no longer builds against modern setuptools. The V2 export therefore
+> ships a small dependency-free PSD writer (8-bit RGB, RLE/raw channels, Unicode layer
+> names) that round-trips through `psd-tools`.
 
 ---
 

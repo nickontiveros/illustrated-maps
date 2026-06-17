@@ -42,6 +42,7 @@ PLAN_FILENAME = "plan.json"
 PREVIEW_FILENAME = "preview.svg"
 ASSETS_DIRNAME = "assets"
 POSTER_FILENAME = "poster.png"
+POSTER_PSD_FILENAME = "poster.psd"
 POSTER_BASE_FILENAME = "poster_base.png"
 REPAINT_DIRNAME = "repaint"
 STYLE_BIBLE_FILENAME = "style_bible.png"
@@ -757,4 +758,37 @@ def compose_poster(
     out = out_path or (project_dir / POSTER_FILENAME)
     image.save(out, dpi=(plan.canvas.dpi, plan.canvas.dpi))
     logger.info("Poster written to %s (%dx%d)", out, image.width, image.height)
+    return out
+
+
+def compose_layered(
+    plan: PlanDocument,
+    project_dir: Path,
+    scale: float = 1.0,
+    out_path: Optional[Path] = None,
+    compression: str = "rle",
+) -> Path:
+    """Render the poster as a layered PSD for hand-editing in Photoshop etc.
+
+    The hard-to-edit surface (ground/water textures, the road network,
+    buildings, atmospheric haze) is pre-flattened into a single ``Base``
+    layer; every element a user typically tweaks -- each POI and scatter
+    sprite group, every text label, the frame -- becomes its own named,
+    positioned layer (see `Compositor.render_layers`). Unlike `compose_poster`
+    this does not run the AI mood pass or paper grain: those are global finish
+    effects best applied to a flattened copy.
+    """
+    from .compose.psd_writer import write_psd
+
+    compositor = Compositor(plan, project_dir / ASSETS_DIRNAME)
+    stack = compositor.render_layers(scale=scale)
+    out = out_path or (project_dir / POSTER_PSD_FILENAME)
+    write_psd(out, stack.size, stack.layers, compression=compression)
+    logger.info(
+        "Layered poster written to %s (%d layers, %dx%d)",
+        out,
+        len(stack.layers),
+        stack.size[0],
+        stack.size[1],
+    )
     return out

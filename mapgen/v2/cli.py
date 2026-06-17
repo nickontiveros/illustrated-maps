@@ -169,6 +169,36 @@ def compose(project_dir: str, scale: float, harmonize: bool, output: str | None)
 
 @v2.command()
 @click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--scale", default=1.0, show_default=True, help="Render scale (0.1 = quick preview).")
+@click.option(
+    "--compression",
+    type=click.Choice(["rle", "raw"]),
+    default="rle",
+    show_default=True,
+    help="PSD channel compression; 'raw' is larger but faster to write.",
+)
+@click.option("-o", "--output", type=click.Path(dir_okay=False), default=None)
+def layered(project_dir: str, scale: float, compression: str, output: str | None) -> None:
+    """Export a layered PSD (editable in Photoshop) from plan.json + assets.
+
+    Ground/water textures, roads, buildings and haze are flattened into one
+    Base layer; each POI and scatter sprite group, every text label, and the
+    frame become individually editable layers.
+    """
+    _, directory = _load_project(project_dir)
+    document = _load_plan(directory)
+    out = pipeline.compose_layered(
+        document,
+        directory,
+        scale=scale,
+        out_path=Path(output) if output else None,
+        compression=compression,
+    )
+    click.echo(f"Layered poster: {out}")
+
+
+@v2.command()
+@click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--scale", default=1.0, show_default=True, help="Final poster scale.")
 @click.option("--strength", default=1.0, show_default=True, help="Texture blend strength (single mode).")
 @click.option("--tiled", is_flag=True, help="EXPERIMENTAL: window-by-window infill engine; seam-free only with a fine-tuned exact-infill painter (zero-shot models redraw context pixels).")
