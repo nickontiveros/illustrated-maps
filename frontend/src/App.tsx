@@ -4,6 +4,7 @@ import ProjectView from './components/ProjectView';
 import ProjectListV2 from './components/V2/ProjectListV2';
 import ProjectViewV2 from './components/V2/ProjectViewV2';
 import MapEditorV2 from './components/V2/editor/MapEditorV2';
+import MapEditorGL from './components/V2/editor-gl/MapEditorGL';
 import GlobalProgressBar from './components/GlobalProgressBar';
 import { useGlobalGeneration } from './hooks/useGlobalGeneration';
 
@@ -21,6 +22,7 @@ function App() {
           <Route path="/v2" element={<ProjectListV2 />} />
           <Route path="/v2/:id" element={<ProjectViewV2 />} />
           <Route path="/v2/:id/edit" element={<MapEditorV2 />} />
+          <Route path="/v2/:id/edit-gl" element={<MapEditorGL />} />
           {/* V1 tile-generation pipeline (legacy) */}
           <Route path="/v1" element={<ProjectList />} />
           <Route path="/project/:name" element={<ProjectView />} />

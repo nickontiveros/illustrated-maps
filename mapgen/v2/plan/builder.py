@@ -190,6 +190,12 @@ class PlanBuilder:
         # Stable ids for feature selection / road routing (idempotent: the
         # pipeline already assigned them; hand-built test sources get them now).
         assign_feature_ids(source)
+        # Names of rivers OSM draws directly: a same-named river POI must not draw
+        # a duplicate ribbon (computed before selection so hiding the OSM ways
+        # doesn't resurrect the POI copy -- the river then hides completely).
+        osm_river_names = {
+            r.name for r in source.roads if r.cls is RoadClass.RIVER and r.name
+        }
         source = self._select_features(source)
 
         def geo_norm(coord: tuple[float, float]) -> Point:
@@ -264,6 +270,19 @@ class PlanBuilder:
         river_labels: list[tuple[str, list[Point]]] = []
         for poi in source.pois:
             if poi.feature_type == "river":
+                # If OSM draws this river (same name), don't draw the POI's ribbon:
+                # it would be a second copy -- warped differently from the OSM ways
+                # and uneditable (no id, ignores offset_uv/hide). The POI then only
+                # supplies the label, riding the visible OSM geometry. If the user
+                # hides every OSM way for it, it disappears completely (no ghost).
+                if poi.name in osm_river_names:
+                    osm_same = [
+                        r for r in roads if r.cls is RoadClass.RIVER and r.name == poi.name
+                    ]
+                    if osm_same:
+                        longest = max(osm_same, key=lambda r: len(r.points))
+                        river_labels.append((poi.name, longest.points))
+                    continue
                 if poi.path and len(poi.path) >= 2:
                     pts = stylize_polyline(
                         to_flat([(lon, lat) for lat, lon in poi.path]),
@@ -530,8 +549,13 @@ class PlanBuilder:
         if ov is not None:
             return ov.treatment, ov.reshape
         if self.road_treatment == "minimal":
-            # Mainline I/US routes + major rivers drawn straight; the rest hidden.
-            if road.cls is RoadClass.RIVER or self._is_mainline(road.ref):
+            # Rivers follow the cartogram like the ground/water they belong to --
+            # drawing them "straight" (unwarped) leaves the river in a different
+            # space than the warped POIs/labels/water bodies around it. Mainline
+            # I/US routes still draw straight (a clean skeleton); the rest hidden.
+            if road.cls is RoadClass.RIVER:
+                return "warped", None
+            if self._is_mainline(road.ref):
                 return "straight", None
             return "hidden", None
         return "warped", None
@@ -573,7 +597,17 @@ class PlanBuilder:
                 (geo_norm(c)[0] * cam.flat_width, geo_norm(c)[1] * cam.flat_height)
                 for c in road.coords
             ]
-        pts = simplify_polyline(cam.project_points(flat), simplify_tol)
+        if road.cls is RoadClass.RIVER and not reshape:
+            # Rivers wind; the coarse straight-road tolerance collapses a
+            # meandering river into a single fake straight diagonal. Keep their
+            # natural curve (fine simplify + densify + smooth, like a warped
+            # road) -- "straight" here only means unwarped, not literally a line.
+            flat = stylize_polyline(
+                flat, canvas.width_px * 0.0006, densify_px=canvas.width_px * 0.02
+            )
+            pts = cam.project_points(flat)
+        else:
+            pts = simplify_polyline(cam.project_points(flat), simplify_tol)
         if len(pts) < 2:
             return None
         mid_y = pts[len(pts) // 2][1]
