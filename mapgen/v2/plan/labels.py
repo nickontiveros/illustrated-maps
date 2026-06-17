@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-from ..types import CanvasSpec, LabelKind, LabelSpec, PoiSlot, Point, RoadClass, RoadPath
+from ..types import CanvasSpec, LabelKind, LabelSpec, PoiSlot, Point, RoadClass, RoadPath, Typography
 from .stylize import polyline_length
 
 # Font sizes as fraction of poster width.
@@ -117,17 +117,26 @@ def plan_labels(
     districts: list[tuple[str, Point, float | None]],
     water_names: list[tuple[str, list[Point]]],
     title: str,
+    typography: Typography | None = None,
 ) -> list[LabelSpec]:
     candidates: list[LabelSpec] = []
     w = canvas.width_px
     h = canvas.height_px
+    typo = typography or Typography()
+
+    def font_px(kind: LabelKind) -> float:
+        """Base font size for a kind in pixels, honouring typography overrides:
+        a per-kind size fraction overrides the FONT_FRACTIONS default, and the
+        global scale multiplies everything."""
+        fraction = typo.for_kind(kind).size or FONT_FRACTIONS[kind]
+        return fraction * typo.scale * w
 
     candidates.append(
         LabelSpec(
             kind=LabelKind.TITLE,
             text=title,
             baseline=[(w * 0.5, canvas.height_px * 0.045)],
-            font_size_px=FONT_FRACTIONS[LabelKind.TITLE] * w,
+            font_size_px=font_px(LabelKind.TITLE),
             priority=1.0,
         )
     )
@@ -138,7 +147,7 @@ def plan_labels(
     # "below" position anyway.
     # One consistent, readable POI label size (no per-tier scaling) so a dense
     # cluster reads as a tidy set rather than a jumble of mismatched sizes.
-    poi_size = FONT_FRACTIONS[LabelKind.POI] * w
+    poi_size = font_px(LabelKind.POI)
     poi_alternates: dict[int, list[list[Point]]] = {}
     poi_own_box: dict[int, tuple[float, float, float, float]] = {}
     never_drop: set[int] = set()  # labels placed even if every position collides
@@ -182,7 +191,7 @@ def plan_labels(
     # City/town names, sized and prioritised by population. The major cities
     # (Phoenix, Tucson, ...) are guaranteed a place near their centre like POI
     # labels; smaller towns are dropped if they collide.
-    district_base = FONT_FRACTIONS[LabelKind.DISTRICT] * w
+    district_base = font_px(LabelKind.DISTRICT)
     for name, pos, population in districts:
         pop = population or 0.0
         factor = max(0.8, min(1.9, 0.6 + 0.0009 * (pop**0.5))) if pop else 0.8
@@ -210,7 +219,7 @@ def plan_labels(
         candidates.append(label)
 
     for name, pts in water_names:
-        size = FONT_FRACTIONS[LabelKind.WATER] * w
+        size = font_px(LabelKind.WATER)
         baseline = [pts[0]] if len(pts) < 2 else (
             _centered_subpath(pts, len(name) * size * CHAR_WIDTH_FACTOR)
             or [pts[len(pts) // 2]]
@@ -225,7 +234,7 @@ def plan_labels(
             )
         )
 
-    size = FONT_FRACTIONS[LabelKind.STREET] * w
+    size = font_px(LabelKind.STREET)
     seen_streets: set[str] = set()
     for road in roads:
         if road.cls not in STREET_LABEL_CLASSES or not road.name or road.name in seen_streets:
@@ -247,7 +256,7 @@ def plan_labels(
 
     # Highway shields: one badge per route designation, on the longest road
     # carrying it across the major network, placed at that road's midpoint.
-    shield_size = FONT_FRACTIONS[LabelKind.SHIELD] * w
+    shield_size = font_px(LabelKind.SHIELD)
     best_by_ref: dict[str, RoadPath] = {}
     for road in roads:
         if road.cls not in (RoadClass.MOTORWAY, RoadClass.PRIMARY) or not road.ref:
@@ -269,6 +278,7 @@ def plan_labels(
                 baseline=[_baseline_midpoint(road.points)],
                 font_size_px=shield_size,
                 priority=0.5,
+                network=road.network,
             )
         )
 

@@ -124,6 +124,10 @@ class OSMService:
         """
         if self._pbf is not None:
             return self._pbf.road_edges(bbox, highway_types)
+        # osmnx drops tags not in useful_tags_way; keep "network" so shields can
+        # pick accurate per-network artwork (e.g. "US:I", "US:AZ").
+        if "network" not in ox.settings.useful_tags_way:
+            ox.settings.useful_tags_way = list(ox.settings.useful_tags_way) + ["network"]
         kwargs = dict(bbox=bbox.to_osmnx_bbox(), network_type="drive", simplify=True)
         if highway_types is not None:
             kwargs["custom_filter"] = f'["highway"~"{"|".join(highway_types)}"]'
@@ -389,6 +393,9 @@ class OSMService:
             # Normalize ref tags for highway shields
             if "ref" in edges.columns:
                 edges["ref_normalized"] = edges["ref"].apply(self._normalize_ref)
+            # Normalize network tags (e.g. "US:I", "US:AZ") for shield artwork
+            if "network" in edges.columns:
+                edges["network_normalized"] = edges["network"].apply(self._normalize_ref)
 
             return edges
 
@@ -429,6 +436,9 @@ class OSMService:
             # Normalize ref tags for highway shields
             if "ref" in edges.columns:
                 edges["ref_normalized"] = edges["ref"].apply(self._normalize_ref)
+            # Normalize network tags (e.g. "US:I", "US:AZ") for shield artwork
+            if "network" in edges.columns:
+                edges["network_normalized"] = edges["network"].apply(self._normalize_ref)
 
             return edges
 

@@ -142,7 +142,7 @@ class AssetStudio:
         }
         if reprocessed:
             meta["reprocessed"] = True
-        if spec.kind in (AssetKind.SPRITE_SHEET, AssetKind.POI_SPRITE, AssetKind.ORNAMENT):
+        if spec.kind in (AssetKind.SPRITE_SHEET, AssetKind.POI_SPRITE, AssetKind.ORNAMENT, AssetKind.SHIELD):
             key = detect_key_color(raw)
             shift = key_shift(key)
             meta["detected_key"] = list(key)
@@ -228,7 +228,7 @@ class AssetStudio:
                 )
         if spec.kind == AssetKind.TEXTURE:
             return ensure_tileable(img)
-        if spec.kind in (AssetKind.SPRITE_SHEET, AssetKind.POI_SPRITE, AssetKind.ORNAMENT):
+        if spec.kind in (AssetKind.SPRITE_SHEET, AssetKind.POI_SPRITE, AssetKind.ORNAMENT, AssetKind.SHIELD):
             # Key out the flat magenta background. Gemini returns opaque RGBA
             # PNGs (alpha channel present but all 255), so mode == "RGBA" does
             # NOT mean the background is already transparent -- only skip keying

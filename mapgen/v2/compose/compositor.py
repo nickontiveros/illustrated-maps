@@ -31,7 +31,8 @@ from ..types import (
     hex_to_rgb,
     shade,
 )
-from .text import draw_text_on_path, load_font
+from .shields import compose_ai_shield, render_shield, shield_asset_id
+from .text import draw_text_on_path, load_font, resolve_font_path
 from .wobble import wobble_polyline, wobble_ring
 
 logger = logging.getLogger(__name__)
@@ -523,23 +524,40 @@ class Compositor:
 
     def _draw_labels(self, canvas: Image.Image, scale: float) -> None:
         label_rgb = self.palette["label"]
-        halo = self.palette["paper"]
+        halo_default = self.palette["paper"]
+        typo = self.plan.style.typography
+        global_font = resolve_font_path(typo.font) or self.font_path
         for label in self.plan.labels:
+            style = typo.for_kind(label.kind)
             size = max(7, int(label.font_size_px * scale))
-            bold = label.kind in (LabelKind.TITLE, LabelKind.DISTRICT, LabelKind.POI)
-            font = load_font(size, self.font_path, bold=bold)
+            default_bold = label.kind in (LabelKind.TITLE, LabelKind.DISTRICT, LabelKind.POI)
+            bold = style.bold if style.bold is not None else default_bold
+            font_path = resolve_font_path(style.font) or global_font
+            font = load_font(size, font_path, bold=bold)
             baseline = self._scaled(label.baseline, scale)
+
+            # Per-kind colour and halo, falling back to palette defaults.
+            if style.color:
+                fill = hex_to_rgb(style.color)
+            elif label.kind == LabelKind.WATER:
+                fill = self.palette["water_edge"]
+            else:
+                fill = label_rgb
+            if style.halo is not None:
+                halo = None if style.halo.lower() == "none" else hex_to_rgb(style.halo)
+            else:
+                halo = halo_default
+
             if label.kind == LabelKind.TITLE:
-                self._draw_title(canvas, label.text, baseline[0], size, scale)
+                self._draw_title(canvas, label.text, baseline[0], size, scale, font_path, fill, halo)
                 continue
             if label.kind == LabelKind.SHIELD:
-                self._draw_shield(canvas, label.text, baseline[0], size)
+                self._draw_shield(canvas, label.text, baseline[0], size, label.network, font_path)
                 continue
             if label.kind == LabelKind.POI:
                 # Landmark names must stay readable on busy painted ground:
                 # set them on a small paper plate (mini-cartouche).
                 self._draw_label_plate(canvas, label.text, baseline[0], font, size)
-            fill = self.palette["water_edge"] if label.kind == LabelKind.WATER else label_rgb
             draw_text_on_path(canvas, label.text, baseline, font, fill, halo=halo)
 
     def _draw_label_plate(
@@ -575,40 +593,47 @@ class Compositor:
             width=max(1, int(size * 0.07)),
         )
 
-    def _draw_shield(self, canvas: Image.Image, text: str, center: Point, size: int) -> None:
-        """A route badge: navy for interstates, cream for US/state routes."""
-        font = load_font(int(size * 1.05), self.font_path, bold=True)
-        t = text.upper()
-        first = t.split()[0] if t.split() else ""
-        if first == "I" or (first.startswith("I") and first[1:].isdigit()):
-            bg, fg, border = (32, 46, 92), (245, 245, 248), (245, 245, 248)
-        elif first == "US":
-            bg, fg, border = (248, 245, 238), (35, 35, 35), (35, 35, 35)
-        else:  # state and everything else
-            bg, fg, border = (248, 245, 238), (120, 32, 32), (120, 32, 32)
-        try:
-            text_w = font.getlength(text)
-            ascent, descent = font.getmetrics()
-            text_h = ascent + descent
-        except AttributeError:
-            text_w, text_h = len(text) * size * 0.6, size * 1.3
-        pad = size * 0.45
-        cx, cy = center
-        x0, y0 = cx - text_w / 2 - pad, cy - text_h / 2 - pad * 0.5
-        x1, y1 = cx + text_w / 2 + pad, cy + text_h / 2 + pad * 0.5
-        draw = ImageDraw.Draw(canvas, "RGBA")
-        draw.rounded_rectangle(
-            [x0, y0, x1, y1],
-            radius=max(2, int(size * 0.22)),
-            fill=bg + (255,),
-            outline=border + (255,),
-            width=max(2, int(size * 0.12)),
+    def _draw_shield(
+        self,
+        canvas: Image.Image,
+        text: str,
+        center: Point,
+        size: int,
+        network: str | None = None,
+        font_path: str | None = None,
+    ) -> None:
+        """Render a highway shield placard: a studio-generated sprite (the
+        blank shield painted in the map style) with the route number drawn on
+        top when available, else an accurate procedural shield, else a text
+        badge."""
+        fp = font_path or self.font_path
+        art = self._asset(shield_asset_id(network)) if network else None
+        if art is not None:
+            sprite = compose_ai_shield(art, text, network, size, fp)
+        else:
+            sprite = render_shield(text, network, size, fp)
+        canvas.alpha_composite(
+            sprite,
+            (int(center[0] - sprite.width / 2), int(center[1] - sprite.height / 2)),
         )
-        draw.text((cx, cy), text, font=font, fill=fg + (255,), anchor="mm")
 
-    def _draw_title(self, canvas: Image.Image, text: str, center: Point, size: int, scale: float) -> None:
+    def _draw_title(
+        self,
+        canvas: Image.Image,
+        text: str,
+        center: Point,
+        size: int,
+        scale: float,
+        font_path: str | None = None,
+        fill: tuple[int, int, int] | None = None,
+        halo: tuple[int, int, int] | None = None,
+    ) -> None:
         cartouche = self._asset("ornament_cartouche")
-        font = load_font(size, self.font_path, bold=True)
+        font = load_font(size, font_path or self.font_path, bold=True)
+        if fill is None:
+            fill = self.palette["label"]
+        if halo is None:
+            halo = self.palette["paper"]
         if cartouche is not None:
             # Size the frame around the lettering, not the other way round:
             # the ornament needs clear margin beyond the text on both sides.
@@ -632,7 +657,7 @@ class Compositor:
             y0 = min(max(margin, int(center[1] - ch / 2)), max(margin, canvas.height - ch - margin))
             canvas.alpha_composite(cartouche, (x0, y0))
             center = (x0 + cw / 2, y0 + ch / 2)
-        draw_text_on_path(canvas, text, [center], font, self.palette["label"], halo=self.palette["paper"])
+        draw_text_on_path(canvas, text, [center], font, fill, halo=halo)
 
     def _draw_frame(self, canvas: Image.Image, scale: float) -> None:
         draw = ImageDraw.Draw(canvas, "RGBA")

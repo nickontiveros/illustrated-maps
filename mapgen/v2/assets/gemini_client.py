@@ -91,6 +91,23 @@ def build_prompt(spec: AssetSpec, style: StyleSpec) -> str:
             f"a scene, never a city block, never signage. The structure must be "
             f"{KEY_CLAUSE}."
         )
+    if spec.kind == AssetKind.SHIELD:
+        ref_clause = (
+            "Use the attached image as the exact reference for the sign's shape, "
+            "proportions, internal divisions and colors; reproduce it faithfully. "
+            if spec.source_photo
+            else ""
+        )
+        return (
+            f"A highway route shield marker sign, painted in the style of {style_clause}. "
+            f"{ref_clause}"
+            "Flat-on view, as if the metal sign is facing the viewer. Render ONLY the "
+            "blank sign itself -- its outline, background color and any inner border or "
+            "banner -- as a hand-painted illustrated placard with gentle brushwork and "
+            "a soft edge. CRITICAL: the sign must be completely BLANK -- absolutely no "
+            "route number, letters, digits or text of any kind anywhere on it. "
+            f"The shield must be {KEY_CLAUSE}."
+        )
     # Ornament
     return (
         f"A decorative map ornament: {spec.subject}, {style_clause}, flat-on view. "

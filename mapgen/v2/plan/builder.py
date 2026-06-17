@@ -19,9 +19,12 @@ import random
 import re
 
 from ..assets.manifest import build_manifest, poi_asset_id
+from ..compose.shields import cached_shield_reference, shield_asset_id
 from ..compose_spec import CompositionSpec
 from ..ingest import GeoFrame, SourceData, assign_feature_ids
 from ..types import (
+    AssetKind,
+    AssetSpec,
     BuildingFootprint,
     CameraSpec,
     CanvasSpec,
@@ -157,6 +160,7 @@ class PlanBuilder:
         seed: int = 7,
         road_treatment: str = "full",
         spec: "CompositionSpec | None" = None,
+        shield_ref_resolver=cached_shield_reference,
     ):
         self.canvas = canvas or CanvasSpec()
         self.camera_spec = camera or CameraSpec()
@@ -164,6 +168,10 @@ class PlanBuilder:
         self.distortion_strength = distortion_strength
         self.seed = seed
         self.road_treatment = road_treatment
+        # Resolves an OSM network ("US:I") to a blank-shield reference image for
+        # the asset studio. Defaults to cache-only (offline); the pipeline swaps
+        # in a fetching resolver so real plan runs populate the reference cache.
+        self.shield_ref_resolver = shield_ref_resolver
         # The editable layout document. An all-auto spec (the default) reads
         # like no spec at all: every seam below falls back to its heuristic, so
         # the plan is byte-identical to the pre-spec pipeline.
@@ -371,6 +379,7 @@ class PlanBuilder:
             districts,
             water_names,
             title=title or "Untitled Map",
+            typography=self.style.typography,
         )
         # Hand-placed label overrides. Each generated label is resolved back to
         # its *source feature id* (the editor keys overrides by that stable id,
@@ -418,6 +427,28 @@ class PlanBuilder:
         for spec in manifest:
             if spec.id in photo_by_asset:
                 spec.source_photo = photo_by_asset[spec.id]
+
+        # One generated shield sprite per route network actually placed, each
+        # primed with a blank-shield reference image. Networks without a
+        # resolvable reference are skipped -- the compositor draws them
+        # procedurally instead.
+        shield_networks = sorted(
+            {l.network for l in labels if l.kind == LabelKind.SHIELD and l.network}
+        )
+        for network in shield_networks:
+            reference = self.shield_ref_resolver(network) if self.shield_ref_resolver else None
+            if reference is None:
+                continue
+            manifest.append(
+                AssetSpec(
+                    id=shield_asset_id(network),
+                    kind=AssetKind.SHIELD,
+                    subject=network,
+                    source_photo=str(reference),
+                    width_px=512,
+                    height_px=512,
+                )
+            )
 
         return PlanDocument(
             name=title or "Untitled Map",
@@ -552,6 +583,7 @@ class PlanBuilder:
             width_px=road_width_px(road.cls, canvas.width_px) * cam.scale_at(mid_y),
             name=road.name,
             ref=road.ref,
+            network=road.network,
             depth=cam.depth(mid_y),
             id=road.id,
         )
@@ -590,6 +622,7 @@ class PlanBuilder:
         flat_roads: list[tuple[RoadClass, list[Point]]] = []
         road_names: list[str | None] = []
         road_refs: list[str | None] = []
+        road_networks: list[str | None] = []
         road_ids: list[str | None] = []
         for road in roads_src:
             pts = stylize_polyline(to_flat(road.coords), simplify_tol, densify_px=densify_px)
@@ -597,9 +630,11 @@ class PlanBuilder:
                 flat_roads.append((road.cls, pts))
                 road_names.append(road.name)
                 road_refs.append(road.ref)
+                road_networks.append(road.network)
                 road_ids.append(road.id)
         name_of = {id(pts): name for (_, pts), name in zip(flat_roads, road_names)}
         ref_of = {id(pts): ref for (_, pts), ref in zip(flat_roads, road_refs)}
+        network_of = {id(pts): net for (_, pts), net in zip(flat_roads, road_networks)}
         id_of = {id(pts): rid for (_, pts), rid in zip(flat_roads, road_ids)}
         kept = prune_roads(flat_roads, canvas.width_px, area_px=cam.flat_width * cam.flat_height)
         out: list[RoadPath] = []
@@ -612,6 +647,7 @@ class PlanBuilder:
                     width_px=road_width_px(cls, canvas.width_px) * cam.scale_at(mid_y),
                     name=name_of.get(id(pts)),
                     ref=ref_of.get(id(pts)),
+                    network=network_of.get(id(pts)),
                     depth=cam.depth(mid_y),
                     id=id_of.get(id(pts)),
                 )

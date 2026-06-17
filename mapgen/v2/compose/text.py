@@ -27,6 +27,48 @@ FONT_CANDIDATES = [
 ]
 
 
+# Directories searched when a font is named (not given as a path).
+_SYSTEM_FONT_DIRS = [
+    str(BUNDLED_FONT.parent),
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    str(Path.home() / ".fonts"),
+    "/System/Library/Fonts",
+    "/System/Library/Fonts/Supplemental",
+    "/Library/Fonts",
+    "C:/Windows/Fonts",
+]
+
+
+def resolve_font_path(name_or_path: str | None) -> str | None:
+    """Resolve a typography font setting to a usable font file path.
+
+    A value that points at an existing file is used as-is. Otherwise it is
+    treated as a family name (e.g. "Caveat", "DejaVu Serif") and matched, case-
+    and space-insensitively, against font files in the bundled and system font
+    directories. Returns None when nothing matches, so callers fall back to the
+    default search in ``load_font``.
+    """
+    if not name_or_path:
+        return None
+    if Path(name_or_path).exists():
+        return name_or_path
+    needle = name_or_path.lower().replace(" ", "").replace("-", "")
+    for directory in _SYSTEM_FONT_DIRS:
+        base = Path(directory)
+        if not base.is_dir():
+            continue
+        try:
+            for path in base.rglob("*"):
+                if path.suffix.lower() not in (".ttf", ".otf", ".ttc"):
+                    continue
+                if needle in path.stem.lower().replace(" ", "").replace("-", ""):
+                    return str(path)
+        except OSError:
+            continue
+    return None
+
+
 def load_font(
     size: int,
     font_path: str | None = None,

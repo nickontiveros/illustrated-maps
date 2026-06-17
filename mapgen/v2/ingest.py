@@ -22,6 +22,7 @@ class SourceRoad:
     coords: list[LonLat]
     name: Optional[str] = None
     ref: Optional[str] = None  # route designation (e.g. "I 10", "US 60")
+    network: Optional[str] = None  # OSM route network (e.g. "US:I", "US:AZ")
     id: Optional[str] = None  # stable feature id (see assign_feature_ids)
 
 
@@ -153,7 +154,14 @@ def load_source(path) -> "SourceData":
         return [(float(x), float(y)) for x, y in seq]
 
     roads = [
-        SourceRoad(cls=RoadClass(r["cls"]), coords=pts(r["coords"]), name=r["name"], ref=r["ref"], id=r["id"])
+        SourceRoad(
+            cls=RoadClass(r["cls"]),
+            coords=pts(r["coords"]),
+            name=r["name"],
+            ref=r["ref"],
+            network=r.get("network"),  # .get: tolerate source.json written before shields
+            id=r["id"],
+        )
         for r in d["roads"]
     ]
     ground = [
@@ -381,8 +389,9 @@ def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cov
             cls = _HIGHWAY_TO_CLASS.get(str(highway), RoadClass.LOCAL)
             name = _clean_name(row.get("name"))
             ref = _clean_name(row.get("ref_normalized") or row.get("ref"))
+            network = _clean_name(row.get("network_normalized") or row.get("network"))
             for coords in _lines(row.geometry):
-                source.roads.append(SourceRoad(cls=cls, coords=coords, name=name, ref=ref))
+                source.roads.append(SourceRoad(cls=cls, coords=coords, name=name, ref=ref, network=network))
 
     for attr, ground_cls in (("water", GroundClass.WATER), ("parks", GroundClass.PARK)):
         gdf = getattr(osm_data, attr, None)
