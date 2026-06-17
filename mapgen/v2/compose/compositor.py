@@ -122,17 +122,19 @@ class Compositor:
     def render(self, scale: float = 1.0) -> Image.Image:
         return self.apply_finish(self.render_base(scale), scale)
 
-    def render_base(self, scale: float = 1.0, sprites: bool = True) -> Image.Image:
+    def render_base(
+        self, scale: float = 1.0, sprites: bool = True, atmosphere: bool = True
+    ) -> Image.Image:
         """Everything below the labels: the repaintable map surface.
 
         Split from `apply_finish` so a tiled AI repaint can transform the
         painted ground/fabric while labels, frame, and grain are composited
         afterwards at native resolution (they must never be repainted).
 
-        ``sprites=False`` omits the scatter and POI passes, leaving only the
-        ground/road/building/atmosphere "plate"; the layered export uses it
-        to build the flattened base layer with the sprites peeled off into
-        their own editable layers (see `render_layers`).
+        ``sprites=False`` omits the scatter and POI passes; ``atmosphere=False``
+        omits the distance-haze gradient. The layered export uses both to build
+        a clean ground/road/building "plate" while the sprites and the haze are
+        peeled into their own editable layers (see `render_layers`).
         """
         plan = self.plan
         width = max(1, int(round(plan.canvas.width_px * scale)))
@@ -151,7 +153,8 @@ class Compositor:
         if sprites:
             self._draw_scatter(canvas, scale)
             self._draw_pois(canvas, scale)
-        self._draw_atmosphere(canvas, scale)
+        if atmosphere:
+            self._draw_atmosphere(canvas, scale)
         return canvas
 
     def apply_finish(self, canvas: Image.Image, scale: float = 1.0) -> Image.Image:
@@ -173,23 +176,25 @@ class Compositor:
         """Render the poster as a stack of named, positioned layers for a
         layered-graphics (PSD) export, bottom-to-top:
 
-          * **Base** -- flattened ground/water textures, roads, buildings and
-            the atmospheric haze. The hard-to-edit surface is deliberately
-            pre-merged into this one plate.
+          * **Base** -- flattened ground/water textures, roads and buildings.
+            The hard-to-edit surface is deliberately pre-merged into this one
+            plate.
           * **Scatter - <kind>** -- one layer per scatter sprite kind
             (trees, boats, cacti, ...), so a whole class can be hidden,
-            recoloured or thinned at once.
+            recoloured or thinned at once. Each is a flat raster, not separable
+            sprites.
           * **POI leaders** -- the connector lines, kept under the sprites.
           * **POI - <name>** -- one layer per landmark sprite (its halo,
             drop-shadow and art), individually movable.
+          * **Haze** -- the distance-haze gradient, as a separate overlay above
+            the map content (matching the flat render order) so its strength
+            can be dialed back or masked off; sits below the labels.
           * **<Kind> - <text>** -- one layer per text label.
           * **Frame & ornaments** -- the border and compass.
 
-        Sprites are peeled out of the base (so the haze that the flat render
-        lays over distant sprites is baked into Base instead); paper grain is
-        omitted as a finish best applied to a flattened copy. The standard
-        `render()` PNG remains the canonical print output -- this stack is for
-        hand-editing.
+        Sprites and haze are peeled out of the base; paper grain is omitted as a
+        finish best applied to a flattened copy. The standard `render()` PNG
+        remains the canonical print output -- this stack is for hand-editing.
         """
         width = max(1, int(round(self.plan.canvas.width_px * scale)))
         height = max(1, int(round(self.plan.canvas.height_px * scale)))
@@ -201,7 +206,7 @@ class Compositor:
         # antialiased polygon edges at sub-255 alpha (a paste-with-mask quirk
         # the flat render hides by ending on convert("RGB")); keeping that
         # alpha would punch faint holes in the export's bottom plate.
-        base = self.render_base(scale=scale, sprites=False).convert("RGB")
+        base = self.render_base(scale=scale, sprites=False, atmosphere=False).convert("RGB")
         layers.append(Layer("Base", base, (0, 0)))
 
         # Scatter: one layer per kind, first-seen order kept stable.
@@ -224,6 +229,13 @@ class Compositor:
             layer = Image.new("RGBA", size, (0, 0, 0, 0))
             self._draw_poi_sprites(layer, scale, [slot])
             self._append_cropped(layers, f"POI - {slot.name}", layer)
+
+        # Distance haze as its own overlay over the map content (the flat render
+        # composites it after the sprites). On a transparent canvas the
+        # atmosphere pass leaves just the haze gradient.
+        haze = Image.new("RGBA", size, (0, 0, 0, 0))
+        self._draw_atmosphere(haze, scale)
+        self._append_cropped(layers, "Haze", haze)
 
         # One layer per text label.
         typo = self.plan.style.typography

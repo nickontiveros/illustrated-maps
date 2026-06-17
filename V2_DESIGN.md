@@ -292,12 +292,14 @@ PNG at print resolution, layered PSD, and DZI deep-zoom for the web viewer (reus
 
 **Layered PSD** (`mapgen v2 layered`, `pipeline.compose_layered`). The layer stack above
 maps to PSD layers, but with a deliberate split for hand-editing: the hard-to-edit
-surface — ground/water textures, the road network, 2.5D buildings and the atmospheric
-haze (layers 1–4, 6) — is pre-flattened into a single **Base** layer, while everything a
-user tweaks by hand is peeled into its own named, positioned layer: one per scatter sprite
-*kind*, one per POI sprite, the POI leader lines, one per text label, and the frame. So you
-can open the file in Photoshop/GIMP/Affinity and move the Empire State Building sprite,
-retype a street name, or hide all the trees, without disturbing the painted base. Paper
+surface — ground/water textures, the road network, 2.5D buildings (layers 1–4) — is
+pre-flattened into a single **Base** layer, while everything a user tweaks by hand is
+peeled into its own named, positioned layer: one per scatter sprite *kind* (a flat raster,
+not separable sprites), one per POI sprite, the POI leader lines, the atmospheric **Haze**
+as a maskable overlay over the map content (above the sprites, below the labels, matching
+the flat render order), one per text label, and the frame. So you can open the file in
+Photoshop/GIMP/Affinity and move the Empire State Building sprite, retype a street name,
+hide all the trees, or dial back the haze, without disturbing the painted base. Paper
 grain is omitted (a global finish best re-applied to a flattened copy), so the canonical
 print output stays `poster.png`. `Compositor.render_layers()` produces the stack;
 `compose/psd_writer.py` writes the `.psd`.

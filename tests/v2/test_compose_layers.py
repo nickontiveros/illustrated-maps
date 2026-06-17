@@ -70,6 +70,11 @@ def test_render_layers_structure(plan, assets_dir):
     # Labels become their own kind-prefixed layers.
     label_prefixes = ("Poi -", "Street -", "District -", "Water -", "Title -")
     assert any(n.startswith(label_prefixes) for n in names)
+    # Haze is its own overlay, above the sprites and below the labels.
+    assert "Haze" in names
+    poi_idx = max(i for i, n in enumerate(names) if n.startswith("POI"))
+    label_idx = min(i for i, n in enumerate(names) if n.startswith(label_prefixes))
+    assert poi_idx < names.index("Haze") < label_idx
     # Every layer carries real content (cropped, non-empty) and a valid offset.
     w, h = stack.size
     for layer in stack.layers:
