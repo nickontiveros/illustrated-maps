@@ -6,6 +6,7 @@
 import createREGL, { type Regl, type Texture2D, type DrawCommand } from 'regl';
 import type { SourceGeojson } from '@/api/v2';
 import { SAMPLES, identityCDF } from './warp';
+import { DEFAULT_CAMERA, type CameraParams } from './project';
 
 export interface ViewState {
   scale: number;
@@ -13,6 +14,9 @@ export interface ViewState {
   ty: number;
 }
 
+// Projection (uProj = [convergence, vertical_scale, horizon_margin]) mirrors
+// ./project.ts project() and mapgen/v2/plan/camera.py exactly, so the GPU draws
+// the real 2.5D poster geometry (warp THEN camera), not just the flat-warped map.
 const VERT = `
 precision highp float;
 attribute vec2 uv;      // normalized source position (0..1)
@@ -21,13 +25,22 @@ uniform vec2 uViewBox;  // (VBW, VBH)
 uniform vec2 uCanvas;   // drawing-buffer px
 uniform vec2 uTranslate;// view.tx, view.ty (viewBox units)
 uniform float uScale;   // view.scale
+uniform vec3 uProj;     // convergence, vertical_scale, horizon_margin
 uniform sampler2D uCdfU, uCdfV;
 varying float vKind;
 void main() {
   // separable warp: sample the CDF lookup (identity CDF => passthrough)
   float wu = texture2D(uCdfU, vec2(clamp(uv.x, 0.0, 1.0), 0.5)).r;
   float wv = texture2D(uCdfV, vec2(clamp(uv.y, 0.0, 1.0), 0.5)).r;
-  vec2 world = vec2(wu * uViewBox.x, wv * uViewBox.y);
+  // oblique camera: flat-warped (wu,wv) -> poster-normalized (X,Y)
+  float conv = uProj.x, vs = uProj.y, hm = uProj.z;
+  float t = clamp(wv, 0.0, 1.0);
+  float ws = conv + (1.0 - conv) * t;
+  float X = 0.5 + (wu - 0.5) * ws;
+  float mean = (vs + 1.0) / 2.0;
+  float integral = vs * t + (1.0 - vs) * t * t / 2.0;
+  float Y = hm + (1.0 - hm) * (integral / mean);
+  vec2 world = vec2(X * uViewBox.x, Y * uViewBox.y);
   vec2 screenVB = world * uScale + uTranslate;          // matches SVG <g> transform
   float sFit = min(uCanvas.x / uViewBox.x, uCanvas.y / uViewBox.y);
   vec2 px = screenVB * sFit + 0.5 * (uCanvas - uViewBox * sFit);
@@ -51,11 +64,17 @@ export interface GLMap {
   setView(v: ViewState): void;
   setSize(cw: number, ch: number): void;
   setCDF(fx: Float32Array, fy: Float32Array): void;
+  setCamera(cam: CameraParams): void;
   draw(): void;
   destroy(): void;
 }
 
-export function createGLMap(canvas: HTMLCanvasElement, VBW: number, VBH: number): GLMap {
+export function createGLMap(
+  canvas: HTMLCanvasElement,
+  VBW: number,
+  VBH: number,
+  cam: CameraParams = DEFAULT_CAMERA
+): GLMap {
   const regl: Regl = createREGL({
     canvas,
     attributes: { antialias: true, premultipliedAlpha: false },
@@ -70,14 +89,24 @@ export function createGLMap(canvas: HTMLCanvasElement, VBW: number, VBH: number)
   let cdfU = mkCdf(identityCDF());
   let cdfV = mkCdf(identityCDF());
   const view: ViewState = { scale: 1, tx: 0, ty: 0 };
+  let camera: CameraParams = cam;
   let canvasSize: [number, number] = [canvas.width, canvas.height];
 
   // --- geometry: roads + ground outlines as line segments ---
   const uvArr: number[] = [];
   const kindArr: number[] = [];
+  // Subdivide so no segment exceeds ~0.02 in normalized space: the camera
+  // projection bends straight lines, so long segments would look angular.
+  const MAX_SEG = 0.02;
   const pushSeg = (a: [number, number], b: [number, number], k: number) => {
-    uvArr.push(a[0], a[1], b[0], b[1]);
-    kindArr.push(k, k);
+    const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / MAX_SEG));
+    for (let s = 0; s < steps; s++) {
+      const f0 = s / steps;
+      const f1 = (s + 1) / steps;
+      uvArr.push(a[0] + (b[0] - a[0]) * f0, a[1] + (b[1] - a[1]) * f0);
+      uvArr.push(a[0] + (b[0] - a[0]) * f1, a[1] + (b[1] - a[1]) * f1);
+      kindArr.push(k, k);
+    }
   };
   // placeholder; filled by setSource below before first draw
   const drawLines: DrawCommand = regl({
@@ -89,6 +118,7 @@ export function createGLMap(canvas: HTMLCanvasElement, VBW: number, VBH: number)
       uCanvas: () => canvasSize,
       uScale: () => view.scale,
       uTranslate: () => [view.tx, view.ty],
+      uProj: () => [camera.convergence, camera.vertical_scale, camera.horizon_margin],
       uCdfU: () => cdfU,
       uCdfV: () => cdfV,
     },
@@ -140,6 +170,9 @@ export function createGLMap(canvas: HTMLCanvasElement, VBW: number, VBH: number)
       cdfV.destroy();
       cdfU = mkCdf(fx);
       cdfV = mkCdf(fy);
+    },
+    setCamera(c) {
+      camera = c;
     },
     draw() {
       regl.clear({ color: [0.969, 0.945, 0.882, 1], depth: 1 });

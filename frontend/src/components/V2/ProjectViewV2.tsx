@@ -183,9 +183,9 @@ function ProjectViewV2() {
                 <Link
                   to={`/v2/${id}/edit-gl`}
                   className="px-3 py-1.5 bg-violet-100 text-violet-700 text-sm rounded-lg hover:bg-violet-200"
-                  title="Experimental WebGL editor with live warp morphing"
+                  title="WebGL editor: live 2.5D poster with WYSIWYG label placement"
                 >
-                  Try WebGL (beta)
+                  WebGL editor
                 </Link>
               )}
               <button
