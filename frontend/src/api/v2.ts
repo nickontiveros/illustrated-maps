@@ -40,7 +40,10 @@ export interface V2JobState {
   total: number;
 }
 
-export type V2Status = Record<'plan' | 'assets' | 'compose' | 'repaint', V2JobState>;
+export type V2Status = Record<
+  'plan' | 'assets' | 'compose' | 'repaint' | 'layered',
+  V2JobState
+>;
 
 export interface V2RepaintQuadrant {
   x: number;
@@ -74,6 +77,8 @@ export interface V2ProjectSummary {
   plan_stale: boolean;
   has_poster: boolean;
   poster_stale: boolean;
+  has_layered: boolean;
+  layered_stale: boolean;
   status: V2Status;
 }
 
@@ -304,6 +309,13 @@ export const v2api = {
       body: JSON.stringify(opts),
     }).then((r) => handle<{ stage: string }>(r)),
 
+  startLayered: (id: string, opts: { scale?: number; compression?: 'rle' | 'raw' }) =>
+    fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/layered`, {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify(opts),
+    }).then((r) => handle<{ stage: string }>(r)),
+
   startRepaint: (
     id: string,
     opts: { scale?: number; repaint_scale?: number; max_calls?: number | null; dry_run?: boolean; stub?: boolean }
@@ -372,6 +384,7 @@ export const v2api = {
 
   previewUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/preview.svg`,
   posterUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/poster`,
+  posterPsdUrl: (id: string) => `${API_BASE}/projects/${encodeURIComponent(id)}/poster.psd`,
   assetUrl: (id: string, assetId: string) =>
     `${API_BASE}/projects/${encodeURIComponent(id)}/assets/${encodeURIComponent(assetId)}`,
 };

@@ -72,6 +72,10 @@ function ProjectViewV2() {
     mutationFn: () => v2api.startCompose(id, { scale, harmonize }),
     onSettled: refresh,
   });
+  const startLayered = useMutation({
+    mutationFn: () => v2api.startLayered(id, { scale }),
+    onSettled: refresh,
+  });
 
   const [dryRun, setDryRun] = useState<V2RepaintDryRun | null>(null);
   const planRepaint = useMutation({
@@ -326,6 +330,41 @@ function ProjectViewV2() {
           ) : (
             <p className="text-sm text-slate-400">Compose to render the poster.</p>
           )}
+
+          {/* Layered export: a Photoshop-editable PSD of the same scene. */}
+          <div className="mt-4 border-t border-slate-100 pt-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={() => startLayered.mutate()}
+                disabled={anyRunning || !project.has_plan}
+                className="px-3 py-1.5 bg-slate-700 text-white text-sm rounded-lg hover:bg-slate-800 disabled:opacity-50"
+                title="Render a layered PSD: each sprite and label on its own editable layer"
+              >
+                Export layered PSD ({Math.round(scale * 100)}%)
+              </button>
+              {status?.layered?.state === 'running' && (
+                <span className="text-xs text-amber-600">exporting…</span>
+              )}
+              {status?.layered?.state === 'error' && (
+                <span className="text-xs text-red-600 break-words">
+                  {status.layered.detail || 'export failed'}
+                </span>
+              )}
+              {project.has_layered && status?.layered?.state !== 'running' && (
+                <a
+                  href={`${v2api.posterPsdUrl(id)}?t=${cacheBust}`}
+                  className="text-sm text-indigo-600 hover:text-indigo-800 underline"
+                >
+                  Download .psd{project.layered_stale ? ' (out of date)' : ''}
+                </a>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 mt-2">
+              Sprites and text labels each become their own layer (the haze too); ground
+              textures, roads and buildings are flattened into a base. Renders at the
+              Compose scale above.
+            </p>
+          </div>
         </section>
       </div>
 

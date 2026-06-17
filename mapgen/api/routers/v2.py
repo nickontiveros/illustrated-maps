@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-STAGES = ("plan", "assets", "compose", "repaint")
+STAGES = ("plan", "assets", "compose", "repaint", "layered")
 
 
 def projects_root() -> Path:
@@ -190,6 +190,10 @@ def _summary(project_id: str) -> dict:
     poster_path = directory / pipeline.POSTER_FILENAME
     has_poster = poster_path.exists()
     poster_stale = has_poster and has_plan and plan_path.stat().st_mtime > poster_path.stat().st_mtime
+    # The layered PSD export tracks the plan the same way the poster does.
+    psd_path = directory / pipeline.POSTER_PSD_FILENAME
+    has_layered = psd_path.exists()
+    layered_stale = has_layered and has_plan and plan_path.stat().st_mtime > psd_path.stat().st_mtime
     return {
         "id": project_id,
         "name": project.name,
@@ -199,6 +203,8 @@ def _summary(project_id: str) -> dict:
         "plan_stale": plan_stale,
         "has_poster": has_poster,
         "poster_stale": poster_stale,
+        "has_layered": has_layered,
+        "layered_stale": layered_stale,
         "status": {k: v.model_dump() for k, v in jobs.status(project_id).items()},
     }
 
@@ -561,6 +567,29 @@ def start_compose(project_id: str, req: ComposeRequest, background: BackgroundTa
     return {"stage": "compose", "state": "started"}
 
 
+class LayeredRequest(BaseModel):
+    scale: float = Field(1.0, gt=0.0, le=1.0)
+    compression: str = Field("rle", pattern="^(rle|raw)$")
+
+
+@router.post("/{project_id}/layered", status_code=202)
+def start_layered(project_id: str, req: LayeredRequest, background: BackgroundTasks) -> dict:
+    """Export a layered PSD (sprites and labels each on their own editable
+    layer). Deterministic and AI-free, like compose."""
+    _, directory = _load_project(project_id)
+    document = _load_plan(directory)
+    if jobs.is_running(project_id):
+        raise HTTPException(409, "A stage is already running")
+
+    def work() -> None:
+        pipeline.compose_layered(
+            document, directory, scale=req.scale, compression=req.compression
+        )
+
+    background.add_task(_run_stage, project_id, "layered", work)
+    return {"stage": "layered", "state": "started"}
+
+
 class RepaintRequest(BaseModel):
     mode: str = Field("single", pattern="^(single|tiled)$")
     scale: float = Field(1.0, gt=0.0, le=1.0)  # final poster scale
@@ -694,6 +723,19 @@ def get_poster(project_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "No poster yet; run the compose stage first")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/{project_id}/poster.psd")
+def get_poster_psd(project_id: str) -> FileResponse:
+    project, directory = _load_project(project_id)
+    path = directory / pipeline.POSTER_PSD_FILENAME
+    if not path.exists():
+        raise HTTPException(404, "No layered export yet; run the layered stage first")
+    return FileResponse(
+        path,
+        media_type="image/vnd.adobe.photoshop",
+        filename=f"{slugify(project.name)}.psd",
+    )
 
 
 @router.get("/{project_id}/status")
