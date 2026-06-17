@@ -471,6 +471,8 @@ def build_plan(
     source: SourceData,
     spec: "CompositionSpec | None" = None,
 ) -> PlanDocument:
+    from .compose.shields import fetch_shield_reference
+
     _attach_pois(source, project)
     frame = make_frame(project)
     builder = PlanBuilder(
@@ -481,6 +483,9 @@ def build_plan(
         seed=project.seed,
         road_treatment=project.road_treatment,
         spec=spec,
+        # Real plan runs fetch missing shield references from Wikimedia and
+        # cache them; tests/offline use the default cache-only resolver.
+        shield_ref_resolver=fetch_shield_reference,
     )
     plan = builder.build(source, title=project.display_title, frame=frame)
     plan.frame = frame.to_dict()

@@ -36,6 +36,8 @@ class StubAssetGenerator:
             return self._poi_building(spec, style, rng)
         if spec.kind == AssetKind.ORNAMENT:
             return self._ornament(spec, style, rng)
+        if spec.kind == AssetKind.SHIELD:
+            return self._shield(spec, style, rng)
         return self._texture(spec, style, rng)  # style bible: a swatch
 
     # -- textures ---------------------------------------------------------
@@ -131,6 +133,25 @@ class StubAssetGenerator:
                 wx = x0 + bw * (0.12 + 0.2 * c)
                 wy = y1 - bh * (0.15 + 0.8 * r / rows)
                 draw.rectangle([wx, wy - h * 0.025, wx + w * 0.06, wy], fill=shade(wall, 0.6))
+        return img
+
+    def _shield(self, spec: AssetSpec, style: StyleSpec, rng: random.Random) -> Image.Image:
+        """A BLANK procedural shield on the magenta key (the number is drawn by
+        the compositor). Shape keyed off the network in ``spec.subject``."""
+        img = Image.new("RGB", (spec.width_px, spec.height_px), KEY_COLOR)
+        draw = ImageDraw.Draw(img)
+        w, h = spec.width_px, spec.height_px
+        sub = str(spec.subject).upper()
+        m = w * 0.12
+        if sub.endswith(":I"):  # interstate: blue body, red top bar
+            draw.polygon(
+                [(m, h * 0.18), (w - m, h * 0.18), (w - m, h * 0.6),
+                 (w / 2, h * 0.9), (m, h * 0.6)],
+                fill=(0, 57, 136), outline=(255, 255, 255),
+            )
+            draw.polygon([(m, h * 0.18), (w - m, h * 0.18), (w - m, h * 0.34), (m, h * 0.34)], fill=(175, 30, 45))
+        else:  # US / state / other: white disc with dark border
+            draw.ellipse([m, m, w - m, h - m], fill=(255, 255, 255), outline=(30, 30, 30), width=max(3, w // 60))
         return img
 
     def _ornament(self, spec: AssetSpec, style: StyleSpec, rng: random.Random) -> Image.Image:

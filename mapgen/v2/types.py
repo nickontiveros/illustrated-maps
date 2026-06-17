@@ -116,6 +116,7 @@ class RoadPath(BaseModel):
     name: Optional[str] = None
     depth: float = 0.0
     ref: Optional[str] = None  # route designation for shields, e.g. "I 10"
+    network: Optional[str] = None  # OSM route network for shields, e.g. "US:I", "US:AZ"
     id: Optional[str] = None  # stable source feature id (for the editor / spec)
 
 
@@ -183,6 +184,7 @@ class LabelSpec(BaseModel):
     baseline: list[Point]  # >= 2 points; straight or curved
     font_size_px: float
     priority: float = 0.5  # higher places first in greedy layout
+    network: Optional[str] = None  # for SHIELD labels: OSM route network, e.g. "US:I"
 
 
 class AssetKind(str, Enum):
@@ -191,6 +193,7 @@ class AssetKind(str, Enum):
     SPRITE_SHEET = "sprite_sheet"
     POI_SPRITE = "poi_sprite"
     ORNAMENT = "ornament"
+    SHIELD = "shield"
 
 
 class AssetSpec(BaseModel):
@@ -218,6 +221,29 @@ class AssetSpec(BaseModel):
             except OSError:
                 pass
         return digest.hexdigest()[:16]
+
+
+class LabelStyle(BaseModel):
+    """Per-label-kind typography override. Any field left None falls back to the
+    built-in default (size from FONT_FRACTIONS, colour/halo from the palette)."""
+
+    size: Optional[float] = None  # font size as a fraction of poster width
+    color: Optional[str] = None  # hex; default = palette["label"] (water -> water_edge)
+    halo: Optional[str] = None  # hex, or "none" to disable; default = palette["paper"]
+    bold: Optional[bool] = None
+    font: Optional[str] = None  # font family name or path, overrides Typography.font
+
+
+class Typography(BaseModel):
+    """Label font and style configuration. Defaults reproduce the built-in look."""
+
+    font: Optional[str] = None  # global font family name or path for all labels
+    scale: float = 1.0  # global multiplier applied to every label size
+    # Per-kind overrides, keyed by LabelKind value ("title", "street", ...).
+    kinds: dict[str, LabelStyle] = Field(default_factory=dict)
+
+    def for_kind(self, kind: "LabelKind") -> LabelStyle:
+        return self.kinds.get(kind.value, LabelStyle())
 
 
 class StyleSpec(BaseModel):
@@ -254,6 +280,9 @@ class StyleSpec(BaseModel):
     wobble_px: float = 1.6  # hand-drawn line jitter amplitude at full scale
     paper_grain: float = 0.05  # 0..1 strength of paper texture overlay
     harmonize_strength: float = 0.5  # low-frequency AI mood blend (0 = off)
+
+    # --- typography (label fonts and styles) ---
+    typography: Typography = Field(default_factory=Typography)
 
     # --- scene vocabulary (region character, not just colors) ---
     # What the style-bible swatch should depict. Keep it generic by default;

@@ -45,6 +45,17 @@ def _load_plan(directory: Path) -> PlanDocument:
     return PlanDocument.load(plan_path)
 
 
+def _apply_typography_overrides(
+    project: "pipeline.V2Project", font: str | None, label_scale: float | None
+) -> None:
+    """Apply CLI typography overrides onto the project's style in place. These
+    take precedence over project.yaml; finer per-kind control stays in config."""
+    if font is not None:
+        project.style.typography.font = font
+    if label_scale is not None:
+        project.style.typography.scale = label_scale
+
+
 def _make_generator(stub: bool):
     if stub:
         from .assets.stub import StubAssetGenerator
@@ -57,9 +68,12 @@ def _make_generator(stub: bool):
 
 @v2.command()
 @click.argument("project_dir", type=click.Path(exists=True, file_okay=False))
-def plan(project_dir: str) -> None:
+@click.option("--font", default=None, help="Override the label font family/path for all labels.")
+@click.option("--label-scale", type=float, default=None, help="Global multiplier on every label size.")
+def plan(project_dir: str, font: str | None, label_scale: float | None) -> None:
     """Build plan.json and preview.svg from live OSM data (free, no AI)."""
     project, directory = _load_project(project_dir)
+    _apply_typography_overrides(project, font, label_scale)
     click.echo(f"Fetching OSM data for {project.name}...")
     source = pipeline.fetch_source(project, cache_dir=directory / "cache")
     assign_feature_ids(source)  # ensure stable ids before persisting
@@ -222,9 +236,15 @@ def repaint(project_dir: str, scale: float, strength: float, tiled: bool, repain
 @click.option("--stub", is_flag=True, help="Use the offline procedural generator (no API cost).")
 @click.option("--harmonize", is_flag=True, help="Apply the low-frequency AI mood pass (one Gemini call).")
 @click.option("--scale", default=1.0, show_default=True)
-def generate(project_dir: str, stub: bool, harmonize: bool, scale: float) -> None:
+@click.option("--font", default=None, help="Override the label font family/path for all labels.")
+@click.option("--label-scale", type=float, default=None, help="Global multiplier on every label size.")
+def generate(
+    project_dir: str, stub: bool, harmonize: bool, scale: float,
+    font: str | None, label_scale: float | None,
+) -> None:
     """Full pipeline: plan -> assets -> compose."""
     project, directory = _load_project(project_dir)
+    _apply_typography_overrides(project, font, label_scale)
     click.echo(f"[1/3] Planning {project.name}...")
     source = pipeline.fetch_source(project, cache_dir=directory / "cache")
     spec = CompositionSpec.load_or_default(directory)

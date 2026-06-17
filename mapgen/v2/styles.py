@@ -46,6 +46,15 @@ PRESETS: dict[str, dict] = {
         },
         "land_scatter": ["cactus", "shrub", "rock"],
         "water_scatter": None,  # no sailboats on desert reservoirs
+        "typography": {
+            # Warm, slightly larger hand-lettering for the travel-poster feel;
+            # district names in deep terracotta ink, streets a touch smaller.
+            "scale": 1.05,
+            "kinds": {
+                "district": {"color": "#7a3b22"},
+                "street": {"size": 0.008},
+            },
+        },
         "texture_hints": {
             "water": "calm desert river water, soft teal brush strokes",
             "land": "dry desert ground wash, warm sand tones, faint scrub stippling",

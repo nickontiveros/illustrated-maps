@@ -142,7 +142,7 @@ class PbfBackend:
         """
         sub = sub.copy()
         wanted_keys = set(tags) | {
-            "name", "ref", "population", "intermittent", "waterway", "highway",
+            "name", "ref", "network", "population", "intermittent", "waterway", "highway",
         }
         # Union of keys actually present in this subset's other_tags.
         present: set[str] = set()
@@ -184,6 +184,11 @@ class PbfBackend:
             sub["ref"] = ref_from_tags
         else:
             sub["ref"] = sub["ref"].where(sub["ref"].notna(), ref_from_tags)
+        network_from_tags = parsed.map(lambda d: d.get("network"))
+        if "network" not in sub.columns:
+            sub["network"] = network_from_tags
+        else:
+            sub["network"] = sub["network"].where(sub["network"].notna(), network_from_tags)
         return gpd.GeoDataFrame(
             sub.reset_index(drop=True), geometry="geometry", crs="EPSG:4326"
         )
