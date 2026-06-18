@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +47,43 @@ ROAD_DRAW_ORDER = [
     RoadClass.MOTORWAY,
 ]
 WATERWAY_CLASSES = (RoadClass.RIVER, RoadClass.STREAM)
+
+
+@dataclass
+class Layer:
+    """One element of a layered export: a cropped RGBA bitmap and the
+    canvas position (left, top) of its top-left corner."""
+
+    name: str
+    image: Image.Image
+    offset: tuple[int, int] = (0, 0)
+
+
+@dataclass
+class LayerStack:
+    """An ordered (bottom-to-top) set of `Layer`s plus the canvas size they
+    were composed against -- the input to a PSD / layered-PNG writer."""
+
+    size: tuple[int, int]
+    layers: list[Layer] = field(default_factory=list)
+
+    def flatten(self) -> Image.Image:
+        """Composite the stack into a single RGBA image (sanity check that the
+        layers reassemble into the poster, and the merged preview for writers
+        that need one)."""
+        out = Image.new("RGBA", self.size, (0, 0, 0, 0))
+        for layer in self.layers:
+            out.alpha_composite(layer.image.convert("RGBA"), layer.offset)
+        return out
+
+
+def _label_layer_name(label) -> str:
+    """A readable, kind-prefixed layer name for a text label."""
+    text = " ".join((label.text or "").split())
+    if len(text) > 40:
+        text = text[:39] + "…"
+    prefix = label.kind.value.capitalize()
+    return f"{prefix} - {text}" if text else prefix
 
 
 class Compositor:
@@ -84,12 +122,19 @@ class Compositor:
     def render(self, scale: float = 1.0) -> Image.Image:
         return self.apply_finish(self.render_base(scale), scale)
 
-    def render_base(self, scale: float = 1.0) -> Image.Image:
+    def render_base(
+        self, scale: float = 1.0, sprites: bool = True, atmosphere: bool = True
+    ) -> Image.Image:
         """Everything below the labels: the repaintable map surface.
 
         Split from `apply_finish` so a tiled AI repaint can transform the
         painted ground/fabric while labels, frame, and grain are composited
         afterwards at native resolution (they must never be repainted).
+
+        ``sprites=False`` omits the scatter and POI passes; ``atmosphere=False``
+        omits the distance-haze gradient. The layered export uses both to build
+        a clean ground/road/building "plate" while the sprites and the haze are
+        peeled into their own editable layers (see `render_layers`).
         """
         plan = self.plan
         width = max(1, int(round(plan.canvas.width_px * scale)))
@@ -105,9 +150,11 @@ class Compositor:
         self._draw_waterways(canvas, scale, wobble)
         self._draw_roads(canvas, scale, wobble)
         self._draw_buildings(canvas, scale)
-        self._draw_scatter(canvas, scale)
-        self._draw_pois(canvas, scale)
-        self._draw_atmosphere(canvas, scale)
+        if sprites:
+            self._draw_scatter(canvas, scale)
+            self._draw_pois(canvas, scale)
+        if atmosphere:
+            self._draw_atmosphere(canvas, scale)
         return canvas
 
     def apply_finish(self, canvas: Image.Image, scale: float = 1.0) -> Image.Image:
@@ -124,6 +171,94 @@ class Compositor:
         self._draw_frame(canvas, scale)
         self._apply_grain(canvas)
         return canvas.convert("RGB")
+
+    def render_layers(self, scale: float = 1.0) -> LayerStack:
+        """Render the poster as a stack of named, positioned layers for a
+        layered-graphics (PSD) export, bottom-to-top:
+
+          * **Base** -- flattened ground/water textures, roads and buildings.
+            The hard-to-edit surface is deliberately pre-merged into this one
+            plate.
+          * **Scatter - <kind>** -- one layer per scatter sprite kind
+            (trees, boats, cacti, ...), so a whole class can be hidden,
+            recoloured or thinned at once. Each is a flat raster, not separable
+            sprites.
+          * **POI leaders** -- the connector lines, kept under the sprites.
+          * **POI - <name>** -- one layer per landmark sprite (its halo,
+            drop-shadow and art), individually movable.
+          * **Haze** -- the distance-haze gradient, as a separate overlay above
+            the map content (matching the flat render order) so its strength
+            can be dialed back or masked off; sits below the labels.
+          * **<Kind> - <text>** -- one layer per text label.
+          * **Frame & ornaments** -- the border and compass.
+
+        Sprites and haze are peeled out of the base; paper grain is omitted as a
+        finish best applied to a flattened copy. The standard `render()` PNG
+        remains the canonical print output -- this stack is for hand-editing.
+        """
+        width = max(1, int(round(self.plan.canvas.width_px * scale)))
+        height = max(1, int(round(self.plan.canvas.height_px * scale)))
+        size = (width, height)
+        self._set_wavelength(scale)
+        layers: list[Layer] = []
+
+        # Drop to RGB: the base is the opaque backdrop, and render_base leaves
+        # antialiased polygon edges at sub-255 alpha (a paste-with-mask quirk
+        # the flat render hides by ending on convert("RGB")); keeping that
+        # alpha would punch faint holes in the export's bottom plate.
+        base = self.render_base(scale=scale, sprites=False, atmosphere=False).convert("RGB")
+        layers.append(Layer("Base", base, (0, 0)))
+
+        # Scatter: one layer per kind, first-seen order kept stable.
+        kinds: list[ScatterKind] = []
+        for slot in self.plan.scatter:
+            if slot.kind not in kinds:
+                kinds.append(slot.kind)
+        for kind in kinds:
+            layer = Image.new("RGBA", size, (0, 0, 0, 0))
+            self._draw_scatter(layer, scale, kinds={kind})
+            self._append_cropped(layers, f"Scatter - {kind.value}", layer)
+
+        # POI leaders sit under every sprite (a pre-pass in the flat render).
+        leaders = Image.new("RGBA", size, (0, 0, 0, 0))
+        self._draw_poi_leaders(leaders, scale)
+        self._append_cropped(layers, "POI leaders", leaders)
+
+        # One layer per POI sprite, back-to-front so nearer sprites stack on top.
+        for slot in sorted(self.plan.pois, key=lambda s: s.anchor[1]):
+            layer = Image.new("RGBA", size, (0, 0, 0, 0))
+            self._draw_poi_sprites(layer, scale, [slot])
+            self._append_cropped(layers, f"POI - {slot.name}", layer)
+
+        # Distance haze as its own overlay over the map content (the flat render
+        # composites it after the sprites). On a transparent canvas the
+        # atmosphere pass leaves just the haze gradient.
+        haze = Image.new("RGBA", size, (0, 0, 0, 0))
+        self._draw_atmosphere(haze, scale)
+        self._append_cropped(layers, "Haze", haze)
+
+        # One layer per text label.
+        typo = self.plan.style.typography
+        global_font = resolve_font_path(typo.font) or self.font_path
+        for label in self.plan.labels:
+            layer = Image.new("RGBA", size, (0, 0, 0, 0))
+            self._draw_one_label(layer, label, scale, typo, global_font)
+            self._append_cropped(layers, _label_layer_name(label), layer)
+
+        frame = Image.new("RGBA", size, (0, 0, 0, 0))
+        self._draw_frame(frame, scale)
+        self._append_cropped(layers, "Frame & ornaments", frame)
+
+        return LayerStack(size=size, layers=layers)
+
+    @staticmethod
+    def _append_cropped(layers: list[Layer], name: str, image: Image.Image) -> None:
+        """Crop a full-canvas layer to its painted content and append it; an
+        empty layer (nothing drawn) is skipped so the export has no blanks."""
+        bbox = image.getbbox()
+        if bbox is None:
+            return
+        layers.append(Layer(name, image.crop(bbox), (bbox[0], bbox[1])))
 
     def render_class_mask(self, classes: set[GroundClass], scale: float = 1.0) -> Image.Image:
         """Mode-"L" mask (255 = inside) of where the given ground classes are
@@ -417,8 +552,12 @@ class Compositor:
                     draw.polygon(quad, fill=shade(wall, edge_shade) + (255,), outline=outline + (200,))
             draw.polygon(top, fill=shade(roof, 1.0 - 0.25 * b.depth) + (255,), outline=outline + (220,))
 
-    def _draw_scatter(self, canvas: Image.Image, scale: float) -> None:
+    def _draw_scatter(
+        self, canvas: Image.Image, scale: float, kinds: set[ScatterKind] | None = None
+    ) -> None:
         for slot in sorted(self.plan.scatter, key=lambda s: s.y):
+            if kinds is not None and slot.kind not in kinds:
+                continue
             sprites = self._sprites(slot.kind)
             if not sprites:
                 continue
@@ -438,9 +577,12 @@ class Compositor:
             canvas.alpha_composite(resized, (x, y))
 
     def _draw_pois(self, canvas: Image.Image, scale: float) -> None:
-        shadow_rgb = self.palette["shadow"]
-        # Leader lines first, as a pre-pass, so every sprite paints on top of
-        # every connector (a connector must never cover a neighbour's sprite).
+        # Leaders first, as a pre-pass, so every sprite paints on top of every
+        # connector (a connector must never cover a neighbour's sprite).
+        self._draw_poi_leaders(canvas, scale)
+        self._draw_poi_sprites(canvas, scale, self.plan.pois)
+
+    def _draw_poi_leaders(self, canvas: Image.Image, scale: float) -> None:
         outline_rgb = self.palette["outline"]
         leader = ImageDraw.Draw(canvas, "RGBA")
         lw = max(1, int(self.plan.canvas.width_px * scale * 0.0012))
@@ -454,7 +596,10 @@ class Compositor:
             leader.ellipse(
                 [x1 - dot_r, y1 - dot_r, x1 + dot_r, y1 + dot_r], fill=outline_rgb + (255,)
             )
-        for slot in sorted(self.plan.pois, key=lambda s: s.anchor[1]):
+
+    def _draw_poi_sprites(self, canvas: Image.Image, scale: float, slots) -> None:
+        shadow_rgb = self.palette["shadow"]
+        for slot in sorted(slots, key=lambda s: s.anchor[1]):
             sprite = self._asset(slot.asset_id)
             w = max(8, int(slot.width_px * scale))
             h = max(8, int(slot.height_px * scale))
@@ -523,42 +668,45 @@ class Compositor:
         canvas.alpha_composite(haze)
 
     def _draw_labels(self, canvas: Image.Image, scale: float) -> None:
-        label_rgb = self.palette["label"]
-        halo_default = self.palette["paper"]
         typo = self.plan.style.typography
         global_font = resolve_font_path(typo.font) or self.font_path
         for label in self.plan.labels:
-            style = typo.for_kind(label.kind)
-            size = max(7, int(label.font_size_px * scale))
-            default_bold = label.kind in (LabelKind.TITLE, LabelKind.DISTRICT, LabelKind.POI)
-            bold = style.bold if style.bold is not None else default_bold
-            font_path = resolve_font_path(style.font) or global_font
-            font = load_font(size, font_path, bold=bold)
-            baseline = self._scaled(label.baseline, scale)
+            self._draw_one_label(canvas, label, scale, typo, global_font)
 
-            # Per-kind colour and halo, falling back to palette defaults.
-            if style.color:
-                fill = hex_to_rgb(style.color)
-            elif label.kind == LabelKind.WATER:
-                fill = self.palette["water_edge"]
-            else:
-                fill = label_rgb
-            if style.halo is not None:
-                halo = None if style.halo.lower() == "none" else hex_to_rgb(style.halo)
-            else:
-                halo = halo_default
+    def _draw_one_label(self, canvas, label, scale, typo, global_font) -> None:
+        label_rgb = self.palette["label"]
+        halo_default = self.palette["paper"]
+        style = typo.for_kind(label.kind)
+        size = max(7, int(label.font_size_px * scale))
+        default_bold = label.kind in (LabelKind.TITLE, LabelKind.DISTRICT, LabelKind.POI)
+        bold = style.bold if style.bold is not None else default_bold
+        font_path = resolve_font_path(style.font) or global_font
+        font = load_font(size, font_path, bold=bold)
+        baseline = self._scaled(label.baseline, scale)
 
-            if label.kind == LabelKind.TITLE:
-                self._draw_title(canvas, label.text, baseline[0], size, scale, font_path, fill, halo)
-                continue
-            if label.kind == LabelKind.SHIELD:
-                self._draw_shield(canvas, label.text, baseline[0], size, label.network, font_path)
-                continue
-            if label.kind == LabelKind.POI:
-                # Landmark names must stay readable on busy painted ground:
-                # set them on a small paper plate (mini-cartouche).
-                self._draw_label_plate(canvas, label.text, baseline[0], font, size)
-            draw_text_on_path(canvas, label.text, baseline, font, fill, halo=halo)
+        # Per-kind colour and halo, falling back to palette defaults.
+        if style.color:
+            fill = hex_to_rgb(style.color)
+        elif label.kind == LabelKind.WATER:
+            fill = self.palette["water_edge"]
+        else:
+            fill = label_rgb
+        if style.halo is not None:
+            halo = None if style.halo.lower() == "none" else hex_to_rgb(style.halo)
+        else:
+            halo = halo_default
+
+        if label.kind == LabelKind.TITLE:
+            self._draw_title(canvas, label.text, baseline[0], size, scale, font_path, fill, halo)
+            return
+        if label.kind == LabelKind.SHIELD:
+            self._draw_shield(canvas, label.text, baseline[0], size, label.network, font_path)
+            return
+        if label.kind == LabelKind.POI:
+            # Landmark names must stay readable on busy painted ground:
+            # set them on a small paper plate (mini-cartouche).
+            self._draw_label_plate(canvas, label.text, baseline[0], font, size)
+        draw_text_on_path(canvas, label.text, baseline, font, fill, halo=halo)
 
     def _draw_label_plate(
         self,

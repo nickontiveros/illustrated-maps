@@ -88,6 +88,7 @@ Then run the stages (see `projects/v2_example/` for a complete example):
 mapgen v2 plan projects/my_map        # plan.json + preview.svg (free, no AI)
 mapgen v2 assets projects/my_map      # AI asset generation (cached)
 mapgen v2 compose projects/my_map     # render the poster
+mapgen v2 layered projects/my_map     # export an editable layered PSD
 
 # Or everything at once:
 mapgen v2 generate projects/my_map
@@ -97,6 +98,7 @@ mapgen v2 assets projects/my_map --stub          # offline placeholder art, no A
 mapgen v2 assets projects/my_map --only poi_wall_street --force   # redo one asset
 mapgen v2 compose projects/my_map --scale 0.25   # quick low-res preview render
 mapgen v2 compose projects/my_map --harmonize    # painterly mood pass (1 extra AI call)
+mapgen v2 layered projects/my_map --scale 0.5    # PSD with each sprite/label on its own layer
 ```
 
 ### Web UI
@@ -126,6 +128,7 @@ POI tiers control prominence on the map: **Hero** (tier 1) landmarks render larg
 | `mapgen v2 plan PROJECT` | Build `plan.json` + `preview.svg` from live OSM data (free) |
 | `mapgen v2 assets PROJECT` | Generate all assets in the plan manifest (cached by content hash) |
 | `mapgen v2 compose PROJECT` | Render the poster from plan + assets |
+| `mapgen v2 layered PROJECT` | Export an editable layered PSD (sprites + labels each on their own layer) |
 | `mapgen v2 repaint PROJECT` | Hand-painted texture pass over the poster base (1 AI call) |
 | `mapgen v2 generate PROJECT` | Full pipeline: plan → assets → compose |
 
@@ -153,7 +156,8 @@ projects/my_map/
 ├── preview.svg       # free layout preview
 ├── assets/           # generated assets (cached) + raw/ originals
 ├── cache/            # OSM data cache
-└── poster.png        # final render
+├── poster.png        # final render
+└── poster.psd        # layered export (written by `mapgen v2 layered`)
 ```
 
 ## Development

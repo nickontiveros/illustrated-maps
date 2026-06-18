@@ -243,6 +243,32 @@ def test_full_pipeline_via_api(client, project_payload):
     assert summary["has_plan"] and summary["has_poster"]
 
 
+def test_layered_export_via_api(client, project_payload):
+    project_id = _create(client, project_payload)
+    client.post(f"/api/v2/projects/{project_id}/plan")
+    client.post(f"/api/v2/projects/{project_id}/assets", json={"stub": True})
+
+    # No PSD until the layered stage has run.
+    assert client.get(f"/api/v2/projects/{project_id}/poster.psd").status_code == 404
+    summary = client.get(f"/api/v2/projects/{project_id}").json()
+    assert summary["has_layered"] is False
+
+    assert client.post(
+        f"/api/v2/projects/{project_id}/layered", json={"scale": 0.25}
+    ).status_code == 202
+    status = client.get(f"/api/v2/projects/{project_id}/status").json()
+    assert status["layered"]["state"] == "done", status["layered"]
+
+    psd = client.get(f"/api/v2/projects/{project_id}/poster.psd")
+    assert psd.status_code == 200
+    assert psd.headers["content-type"] == "image/vnd.adobe.photoshop"
+    assert "test_town.psd" in psd.headers.get("content-disposition", "")
+    assert psd.content[:4] == b"8BPS"  # a real PSD signature
+
+    summary = client.get(f"/api/v2/projects/{project_id}").json()
+    assert summary["has_layered"] and not summary["layered_stale"]
+
+
 def test_asset_flagging(client, project_payload):
     project_id = _create(client, project_payload)
     client.post(f"/api/v2/projects/{project_id}/plan")
