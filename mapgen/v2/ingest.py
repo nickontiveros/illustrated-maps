@@ -62,11 +62,25 @@ class SourcePlace:
 
 
 @dataclass
+class SourceBuilding:
+    """A building footprint plus optional real-world height.
+
+    ``height_m`` is the building height in meters when OSM carries a usable
+    ``height`` or ``building:levels`` tag; ``None`` means the plan builder
+    falls back to a default height.
+    """
+
+    exterior: list[LonLat]
+    height_m: Optional[float] = None
+    id: Optional[str] = None
+
+
+@dataclass
 class SourceData:
     region: RegionBBox
     roads: list[SourceRoad] = field(default_factory=list)
     ground: list[SourcePolygon] = field(default_factory=list)
-    buildings: list[list[LonLat]] = field(default_factory=list)
+    buildings: list[SourceBuilding] = field(default_factory=list)
     pois: list[SourcePoi] = field(default_factory=list)
     places: list[SourcePlace] = field(default_factory=list)
     # Fetch provenance: detail level used and per-layer outcome
@@ -138,7 +152,7 @@ def save_source(source: "SourceData", path) -> None:
         "ground": [asdict(g) for g in source.ground],
         "pois": [asdict(p) for p in source.pois],
         "places": [asdict(p) for p in source.places],
-        "buildings": source.buildings,
+        "buildings": [asdict(b) for b in source.buildings],
         "provenance": source.provenance,
     }
     Path(path).write_text(json.dumps(data, default=enc))
@@ -183,13 +197,25 @@ def load_source(path) -> "SourceData":
         for p in d["pois"]
     ]
     places = [SourcePlace(**p) for p in d["places"]]
+
+    def building(b):
+        # Legacy source.json stored each building as a bare coord list; the
+        # current shape is a {exterior, height_m, id} object. Accept both.
+        if isinstance(b, dict):
+            return SourceBuilding(
+                exterior=pts(b["exterior"]),
+                height_m=b.get("height_m"),
+                id=b.get("id"),
+            )
+        return SourceBuilding(exterior=pts(b))
+
     return SourceData(
         region=RegionBBox(**d["region"]),
         roads=roads,
         ground=ground,
         pois=pois,
         places=places,
-        buildings=[pts(b) for b in d.get("buildings", [])],
+        buildings=[building(b) for b in d.get("buildings", [])],
         provenance=d.get("provenance", {}),
     )
 
@@ -282,11 +308,42 @@ class GeoFrame:
         y = -(e * self._sin_b + n * self._cos_b)
         return (x, y)
 
+    def _from_frame_km(self, p: Point) -> LonLat:
+        """Inverse of ``_to_frame_km``: rotated local km -> lon/lat."""
+        x, y = p
+        # Invert the frame rotation: (x, y) -> (e, n).
+        e = x * self._cos_b - y * self._sin_b
+        n = -(x * self._sin_b + y * self._cos_b)
+        return (self._lon_c + e / self._kx, self._lat_c + n / self._ky)
+
     def to_normalized(self, coord: LonLat) -> Point:
         x, y = self._to_frame_km(coord)
         return (
             (x - self._x0) / max(1e-9, self._x1 - self._x0),
             (y - self._y0) / max(1e-9, self._y1 - self._y0),
+        )
+
+    def from_normalized(self, uv: Point) -> LonLat:
+        """Inverse of ``to_normalized``: frame uv in [0,1] -> lon/lat.
+
+        Required to sample raster sources (satellite, hillshade) into the same
+        rotated, aspect-extended frame the vector geometry uses.
+        """
+        x = self._x0 + uv[0] * (self._x1 - self._x0)
+        y = self._y0 + uv[1] * (self._y1 - self._y0)
+        return self._from_frame_km((x, y))
+
+    def km_per_flat_unit(self, flat_w: float, flat_h: float) -> tuple[float, float]:
+        """Ground km represented by one flat-space unit on each axis.
+
+        Multiply by ``flat_w``/``flat_h`` pixels to recover the frame's metric
+        extent; the inverse converts real meters to flat pixels (building
+        heights). x and y are returned separately since the aspect extension
+        grows only one axis.
+        """
+        return (
+            (self._x1 - self._x0) / max(1e-9, flat_w),
+            (self._y1 - self._y0) / max(1e-9, flat_h),
         )
 
     @property
@@ -300,11 +357,9 @@ class GeoFrame:
         ]
         lons, lats = [], []
         for x, y in corners_km:
-            # Invert the frame rotation: (x, y) -> (e, n).
-            e = x * self._cos_b - y * self._sin_b
-            n = -(x * self._sin_b + y * self._cos_b)
-            lons.append(self._lon_c + e / self._kx)
-            lats.append(self._lat_c + n / self._ky)
+            lon, lat = self._from_frame_km((x, y))
+            lons.append(lon)
+            lats.append(lat)
         return RegionBBox(north=max(lats), south=min(lats), east=max(lons), west=min(lons))
 
     def to_dict(self) -> dict:
@@ -399,10 +454,15 @@ def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cov
             continue
         for _, row in gdf.iterrows():
             name = _clean_name(row.get("name"))
+            # Golf courses ride in the parks layer but read as their own
+            # manicured-fairway class rather than collapsing into PARK.
+            row_cls = ground_cls
+            if ground_cls is GroundClass.PARK and _clean_name(row.get("leisure")) == "golf_course":
+                row_cls = GroundClass.GOLF
             for poly in _polys(row.geometry):
                 source.ground.append(
                     SourcePolygon(
-                        cls=ground_cls,
+                        cls=row_cls,
                         exterior=list(poly.exterior.coords),
                         holes=[list(ring.coords) for ring in poly.interiors],
                         name=name,
@@ -421,6 +481,9 @@ def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cov
         "desert": GroundClass.SAND,
         "forest": GroundClass.FOREST,
         "grassland": GroundClass.FARMLAND,
+        "cemetery": GroundClass.CEMETERY,
+        "beach": GroundClass.BEACH,
+        "wetland": GroundClass.WETLAND,
     }
     terrain_gdf = getattr(osm_data, "terrain_types", None)
     if terrain_gdf is not None:
@@ -458,8 +521,17 @@ def from_osm_data(osm_data, region: RegionBBox) -> SourceData:  # pragma: no cov
 
     buildings_gdf = getattr(osm_data, "buildings", None)
     if buildings_gdf is not None:
+        has_height = "height_m" in buildings_gdf.columns
         for _, row in buildings_gdf.iterrows():
+            height_m = None
+            if has_height:
+                raw = row.get("height_m")
+                # pandas stores missing values as NaN (a float); skip those.
+                if raw is not None and raw == raw:
+                    height_m = float(raw)
             for poly in _polys(row.geometry):
-                source.buildings.append(list(poly.exterior.coords))
+                source.buildings.append(
+                    SourceBuilding(exterior=list(poly.exterior.coords), height_m=height_m)
+                )
 
     return source

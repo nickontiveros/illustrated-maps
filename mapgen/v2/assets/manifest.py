@@ -15,6 +15,10 @@ TEXTURE_HINTS: dict[GroundClass, str] = {
     GroundClass.SAND: "dry sandy ground, light stippling",
     GroundClass.FARMLAND: "patchwork farm fields from above",
     GroundClass.URBAN: "subtle urban block fill, faint paving tone",
+    GroundClass.GOLF: "manicured golf fairway, mown grass stripes",
+    GroundClass.CEMETERY: "quiet cemetery lawn with faint rows of markers",
+    GroundClass.BEACH: "pale sandy beach, fine stipple, water-edge tone",
+    GroundClass.WETLAND: "marshy wetland, reedy grass and patches of water",
     GroundClass.LAND: "plain paper-toned ground wash",
 }
 

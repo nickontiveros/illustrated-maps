@@ -53,6 +53,10 @@ from .stylize import prune_roads, road_width_px, simplify_polyline, stylize_poly
 
 logger = logging.getLogger(__name__)
 
+# Fallback height (meters) for buildings OSM doesn't tag -- roughly three
+# storeys, so untagged blocks still get believable massing.
+_DEFAULT_BUILDING_HEIGHT_M = 9.0
+
 SCATTER_FOR_GROUND = {
     GroundClass.PARK: ScatterKind.TREE,
     GroundClass.FOREST: ScatterKind.TREE,
@@ -246,19 +250,34 @@ class PlanBuilder:
 
         # --- Buildings (2.5D fabric) ---
         buildings: list[BuildingFootprint] = []
-        base_height = canvas.width_px * 0.006
+        # Flat-space pixels per real meter (mean of both frame axes -- a building
+        # is near-square in scale, and the aspect extension grows only one axis).
+        km_x, km_y = frame.km_per_flat_unit(cam.flat_width, cam.flat_height)
+        m_per_flat_px = (km_x + km_y) / 2.0 * 1000.0
+        flat_px_per_m = 1.0 / max(1e-9, m_per_flat_px)
+        # A mis-tagged 300 m height can't be allowed to shoot off the canvas.
+        max_height_px = canvas.width_px * 0.06
         for footprint in source.buildings:
             # Buildings keep their corners: simplify only, never smooth --
             # a rectangular footprint must stay rectangular.
-            flat = simplify_polyline(to_flat(footprint), simplify_tol / 2)
+            flat = simplify_polyline(to_flat(footprint.exterior), simplify_tol / 2)
             if len(flat) < 3:
                 continue
             mid_y = sum(p[1] for p in flat) / len(flat)
             depth = cam.depth(mid_y)
+            # Real height from OSM tags; fall back to a ~3-storey default. A
+            # small jitter keeps identical-height blocks from looking CGI-flat.
+            height_m = footprint.height_m
+            # NaN fails both ``is None`` and ``<= 0``, so test it explicitly.
+            if height_m is None or height_m != height_m or height_m <= 0:
+                height_m = _DEFAULT_BUILDING_HEIGHT_M
+            height_px = height_m * flat_px_per_m * cam.scale_at(mid_y)
+            height_px *= rng.uniform(0.95, 1.05)
+            height_px = min(height_px, max_height_px)
             buildings.append(
                 BuildingFootprint(
                     polygon=cam.project_points(flat),
-                    height_px=base_height * cam.scale_at(mid_y) * rng.uniform(0.8, 1.6),
+                    height_px=height_px,
                     depth=depth,
                 )
             )

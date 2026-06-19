@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from mapgen.v2.ingest import SourceData, SourcePlace, SourcePoi, SourcePolygon, SourceRoad
+from mapgen.v2.ingest import (
+    SourceBuilding,
+    SourceData,
+    SourcePlace,
+    SourcePoi,
+    SourcePolygon,
+    SourceRoad,
+)
 from mapgen.v2.types import CanvasSpec, GroundClass, RegionBBox, RoadClass
 
 # --- visual artifact harness -------------------------------------------------
@@ -165,8 +172,13 @@ def source(region: RegionBBox) -> SourceData:
             ),
         ],
         buildings=[
-            [(lon(0.30), lat(0.40)), (lon(0.33), lat(0.40)), (lon(0.33), lat(0.43)), (lon(0.30), lat(0.43))],
-            [(lon(0.45), lat(0.35)), (lon(0.49), lat(0.35)), (lon(0.49), lat(0.38)), (lon(0.45), lat(0.38))],
+            SourceBuilding(
+                exterior=[(lon(0.30), lat(0.40)), (lon(0.33), lat(0.40)), (lon(0.33), lat(0.43)), (lon(0.30), lat(0.43))],
+                height_m=24.0,
+            ),
+            SourceBuilding(
+                exterior=[(lon(0.45), lat(0.35)), (lon(0.49), lat(0.35)), (lon(0.49), lat(0.38)), (lon(0.45), lat(0.38))],
+            ),
         ],
         pois=[
             SourcePoi(id="lighthouse", name="Old Lighthouse", latitude=lat(0.25), longitude=lon(0.72), tier=1),

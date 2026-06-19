@@ -9,6 +9,39 @@ from shapely.geometry import MultiPolygon, Polygon
 
 from ..models.project import BoundingBox
 
+_FEET_PER_METER = 3.28084
+
+
+def _parse_float(value) -> Optional[float]:
+    """First numeric token of an OSM tag value, or None.
+
+    OSM cells arrive as strings ("12"), lists (multi-valued ways), or pandas
+    NaN floats; tolerate all three.
+    """
+    import re
+
+    if value is None:
+        return None
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, (int, float)):
+        return None if value != value else float(value)  # NaN check
+    if not isinstance(value, str):
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", value)
+    return float(m.group()) if m else None
+
+
+def _parse_metric_height(value) -> Optional[float]:
+    """OSM ``height`` value in meters, honoring a "ft"/"'" unit suffix."""
+    num = _parse_float(value)
+    if num is None:
+        return None
+    text = value[0] if isinstance(value, list) and value else value
+    if isinstance(text, str) and ("ft" in text or "'" in text or '"' in text):
+        return num / _FEET_PER_METER
+    return num
+
 
 @dataclass
 class OSMData:
@@ -64,8 +97,18 @@ class OSMService:
             "landuse": ["grass", "meadow", "farmland"],
             "natural": ["grassland", "heath"],
         },
+        "wetland": {
+            "natural": ["wetland"],
+        },
+        "beach": {
+            "natural": ["beach"],
+        },
+        "cemetery": {
+            "landuse": ["cemetery"],
+            "amenity": ["grave_yard"],
+        },
         "water": {
-            "natural": ["water", "wetland"],
+            "natural": ["water"],
             "waterway": True,
         },
         "mountain": {
@@ -572,11 +615,33 @@ class OSMService:
             else:
                 buildings["building_type"] = "yes"
 
+            # Real-world height in meters, from an explicit ``height`` tag or
+            # derived from ``building:levels``; NaN where neither is tagged.
+            buildings = buildings.copy()
+            buildings["height_m"] = buildings.apply(self._building_height_m, axis=1)
+
             return buildings
 
         except Exception as e:
             print(f"Warning: Could not extract buildings: {e}")
             return None
+
+    def _building_height_m(self, row) -> float:
+        """Meters of building height from OSM tags, or NaN when untagged.
+
+        ``height`` is metric (may carry a "m"/"ft" unit suffix);
+        ``building:levels`` is a storey count converted at ~3.2 m/level.
+        """
+        import math
+
+        h = _parse_metric_height(row.get("height"))
+        if h is None:
+            levels = _parse_float(row.get("building:levels"))
+            if levels is not None and levels > 0:
+                h = levels * 3.2
+        if h is None or h <= 0:
+            return math.nan
+        return h
 
     def extract_notable_buildings(
         self,
@@ -848,7 +913,7 @@ class OSMService:
         """
         try:
             park_tags = {
-                "leisure": ["park", "garden", "nature_reserve"],
+                "leisure": ["park", "garden", "nature_reserve", "golf_course"],
                 "landuse": ["recreation_ground", "village_green"],
             }
 
@@ -917,6 +982,7 @@ class OSMService:
                     "farmland",
                     "orchard",
                     "vineyard",
+                    "cemetery",
                 ],
                 "natural": [
                     "wood",
@@ -925,9 +991,11 @@ class OSMService:
                     "heath",
                     "sand",
                     "beach",
+                    "wetland",
                     "rock",
                     "bare_rock",
                 ],
+                "amenity": ["grave_yard"],
             }
 
             terrain = self._features(bbox, terrain_tags)
@@ -948,12 +1016,15 @@ class OSMService:
         """Classify terrain type from OSM tags."""
         landuse = row.get("landuse")
         natural = row.get("natural")
+        amenity = row.get("amenity")
 
         # Check against terrain categories
         for terrain_type, tags in self.TERRAIN_TAGS.items():
             if "landuse" in tags and landuse in tags["landuse"]:
                 return terrain_type
             if "natural" in tags and natural in tags["natural"]:
+                return terrain_type
+            if "amenity" in tags and amenity in tags["amenity"]:
                 return terrain_type
 
         return "other"

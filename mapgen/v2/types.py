@@ -87,6 +87,10 @@ class GroundClass(str, Enum):
     SAND = "sand"
     FARMLAND = "farmland"
     URBAN = "urban"
+    GOLF = "golf"
+    CEMETERY = "cemetery"
+    BEACH = "beach"
+    WETLAND = "wetland"
     LAND = "land"  # base/default ground
 
 
@@ -265,6 +269,10 @@ class StyleSpec(BaseModel):
             "forest": "#84996a",
             "sand": "#e8d49a",
             "farmland": "#d6c992",
+            "golf": "#9fc27a",
+            "cemetery": "#b9c39a",
+            "beach": "#ecdcae",
+            "wetland": "#9fb589",
             "road_fill": "#fdf7e2",
             "road_casing": "#8f6f45",
             "motorway_fill": "#e8b86d",
