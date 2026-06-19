@@ -254,6 +254,13 @@ class StyleSpec(BaseModel):
     """Palette + finish parameters shared by asset prompts and compositor."""
 
     preset: str = "vintage_tourist"
+    # Base layer treatment. "illustrated" = AI-painted ground textures (the
+    # original look); "satellite" = real satellite imagery warped to the
+    # oblique camera, with vector roads/labels/3D buildings composited on top.
+    base_mode: str = Field("illustrated", pattern="^(illustrated|satellite)$")
+    # Satellite tile zoom override; None lets the service auto-pick from the
+    # region size (capped at Mapbox's z18).
+    satellite_zoom: Optional[int] = None
     description: str = (
         "vintage hand-painted tourist map illustration, warm muted gouache "
         "palette, soft brushwork, 1950s travel poster feel"
@@ -338,6 +345,11 @@ class PlanDocument(BaseModel):
     # coordinates into this plan -- consumers adding geo features later must
     # reconstruct the same frame (ingest.GeoFrame.from_dict).
     frame: dict = Field(default_factory=dict)
+
+    # Serialized importance-distortion warp (per-axis CDFs) so the compositor
+    # can register raster sources (satellite) into the same warped space the
+    # vectors live in. Empty => identity warp.
+    warp: dict = Field(default_factory=dict)
 
     def save(self, path: Path | str) -> None:
         Path(path).write_text(self.model_dump_json(indent=1))

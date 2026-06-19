@@ -501,6 +501,8 @@ class PlanBuilder:
             scatter=scatter,
             labels=labels,
             manifest=manifest,
+            frame=frame.to_dict(),
+            warp=warp.to_dict(),
             provenance={
                 "warp_fit": {
                     "sprite_scale": round(sprite_scale, 3),

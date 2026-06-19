@@ -93,6 +93,34 @@ class Compositor:
         self.font_path = font_path
         self.palette = {k: hex_to_rgb(v) for k, v in plan.style.palette.items()}
         self._sprite_cache: dict[str, list[Image.Image]] = {}
+        self._sat_base_cache: dict[float, Image.Image | None] = {}
+
+    @property
+    def _satellite_mode(self) -> bool:
+        return self.plan.style.base_mode == "satellite"
+
+    def _satellite_base(self, scale: float) -> Image.Image | None:
+        """The warped, poster-space satellite base for this scale, or None when
+        not in satellite mode / no Mapbox token / fetch failed (the caller then
+        falls back to the painted illustrated land)."""
+        if not self._satellite_mode:
+            return None
+        if scale not in self._sat_base_cache:
+            from .satellite_base import SatelliteBaseBuilder
+
+            img = None
+            try:
+                builder = SatelliteBaseBuilder.from_plan(
+                    self.plan, cache_dir=self.assets_dir / "satellite"
+                )
+                img = builder.poster_base(scale)
+            except Exception as exc:  # never let the base sink a whole poster
+                logger.warning("Satellite base build failed; using illustrated land: %s", exc)
+                img = None
+            if img is None:
+                logger.warning("Satellite base unavailable; falling back to illustrated land")
+            self._sat_base_cache[scale] = img
+        return self._sat_base_cache[scale]
 
     # -- asset access ------------------------------------------------------
 
@@ -145,13 +173,24 @@ class Compositor:
         logger.info("Compositing %dx%d (scale %.2f)", width, height, scale)
         self._set_wavelength(scale)
 
-        self._draw_base_land(canvas, scale)
-        self._draw_ground(canvas, scale, wobble)
+        sat_base = self._satellite_base(scale)
+        if sat_base is not None:
+            # Photoreal base replaces the painted land + ground textures; the
+            # ground pass still inks water/coast edges so shorelines read.
+            self._draw_base_land(canvas, scale)  # paper backdrop under the trapezoid
+            canvas.alpha_composite(sat_base)
+            self._draw_ground(canvas, scale, wobble, edges_only=True)
+        else:
+            self._draw_base_land(canvas, scale)
+            self._draw_ground(canvas, scale, wobble)
         self._draw_waterways(canvas, scale, wobble)
         self._draw_roads(canvas, scale, wobble)
         self._draw_buildings(canvas, scale)
         if sprites:
-            self._draw_scatter(canvas, scale)
+            # Painted scatter (trees, houses) double up on real imagery, so the
+            # land-dressing pass is suppressed when a satellite base is shown.
+            if sat_base is None:
+                self._draw_scatter(canvas, scale)
             self._draw_pois(canvas, scale)
         if atmosphere:
             self._draw_atmosphere(canvas, scale)
@@ -424,47 +463,58 @@ class Compositor:
     def _scaled(self, points: list[Point], scale: float) -> list[Point]:
         return [(x * scale, y * scale) for x, y in points]
 
-    def _draw_ground(self, canvas: Image.Image, scale: float, wobble: float) -> None:
+    def _draw_ground(
+        self, canvas: Image.Image, scale: float, wobble: float, edges_only: bool = False
+    ) -> None:
         # Water first, then vegetation/land classes on top (see _ground_rings).
         # All mask/texture work happens on the polygon's bounding box, not the
         # full canvas: a state-scale plan has hundreds of ground polygons, and
         # full-canvas layers per polygon (~1.7 GB transient each at print
         # size) OOM-kill a WSL VM long before they finish.
+        #
+        # ``edges_only`` (satellite base mode) skips the texture/colour fill and
+        # keeps only the painterly water/coast edge ink, so shorelines stay
+        # legible over the photoreal imagery.
         for poly, ring, holes in self._ground_rings(scale, wobble):
             if len(ring) < 3:
                 continue
-            pad = 4
-            x0 = max(0, int(min(p[0] for p in ring)) - pad)
-            y0 = max(0, int(min(p[1] for p in ring)) - pad)
-            x1 = min(canvas.width, int(max(p[0] for p in ring)) + pad)
-            y1 = min(canvas.height, int(max(p[1] for p in ring)) + pad)
-            if x1 <= x0 or y1 <= y0:
-                continue
-            box_size = (x1 - x0, y1 - y0)
-            local_ring = [(x - x0, y - y0) for x, y in ring]
+            if not edges_only:
+                pad = 4
+                x0 = max(0, int(min(p[0] for p in ring)) - pad)
+                y0 = max(0, int(min(p[1] for p in ring)) - pad)
+                x1 = min(canvas.width, int(max(p[0] for p in ring)) + pad)
+                y1 = min(canvas.height, int(max(p[1] for p in ring)) + pad)
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                box_size = (x1 - x0, y1 - y0)
+                local_ring = [(x - x0, y - y0) for x, y in ring]
 
-            mask = Image.new("L", box_size, 0)
-            mdraw = ImageDraw.Draw(mask)
-            mdraw.polygon(local_ring, fill=255)
-            for hole_ring in holes:
-                if len(hole_ring) >= 3:
-                    mdraw.polygon([(x - x0, y - y0) for x, y in hole_ring], fill=0)
+                mask = Image.new("L", box_size, 0)
+                mdraw = ImageDraw.Draw(mask)
+                mdraw.polygon(local_ring, fill=255)
+                for hole_ring in holes:
+                    if len(hole_ring) >= 3:
+                        mdraw.polygon([(x - x0, y - y0) for x, y in hole_ring], fill=0)
 
-            texture = self._texture(poly.cls)
-            fill_color = self.palette.get(poly.cls.value, self.palette["land"])
-            if texture is not None:
-                patch = self._tile_texture(
-                    texture, box_size, scale, offset=(x0, y0), canvas_size=canvas.size
-                )
-            else:
-                patch = Image.new("RGB", box_size, fill_color)
-            canvas.paste(patch, (x0, y0), mask)
+                texture = self._texture(poly.cls)
+                fill_color = self.palette.get(poly.cls.value, self.palette["land"])
+                if texture is not None:
+                    patch = self._tile_texture(
+                        texture, box_size, scale, offset=(x0, y0), canvas_size=canvas.size
+                    )
+                else:
+                    patch = Image.new("RGB", box_size, fill_color)
+                canvas.paste(patch, (x0, y0), mask)
 
             # Painterly edge: darkened wobbly outline, heavier for water.
             # Urban/land fills are subtle tone shifts, not washes -- no edge.
             if poly.cls in (GroundClass.URBAN, GroundClass.LAND):
                 continue
             water = poly.cls == GroundClass.WATER
+            # Over photoreal imagery only shorelines get inked; vegetation
+            # outlines would fight the real textures.
+            if edges_only and not water:
+                continue
             edge_key = "water_edge" if water else "outline"
             edge_width = max(1, int((3.0 if water else 2.0) * scale * 2))
             alpha = 140 if water else 90
@@ -531,11 +581,16 @@ class Compositor:
             draw.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=color + (255,))
 
     def _draw_buildings(self, canvas: Image.Image, scale: float) -> None:
-        """2.5D extrusion of footprints: roof shifted up, visible side faces."""
+        """2.5D extrusion of footprints: roof shifted up, visible side faces.
+
+        In satellite base mode the roof is the real imagery under the footprint
+        (sampled from the warped base) lifted to the roof height, so rooftops
+        match the ground; walls stay solid-shaded (top-down imagery has none)."""
         draw = ImageDraw.Draw(canvas, "RGBA")
         wall = self.palette["building_wall"]
         roof = self.palette["building_roof"]
         outline = self.palette["outline"]
+        sat_base = self._satellite_base(scale)
         for b in sorted(self.plan.buildings, key=lambda b: max(p[1] for p in b.polygon)):
             base = self._scaled(b.polygon, scale)
             if len(base) < 3:
@@ -550,7 +605,37 @@ class Compositor:
                     quad = [p1, p2, (p2[0], p2[1] - lift), (p1[0], p1[1] - lift)]
                     edge_shade = 0.78 + 0.18 * abs(p2[0] - p1[0]) / (math.hypot(p2[0] - p1[0], p2[1] - p1[1]) or 1)
                     draw.polygon(quad, fill=shade(wall, edge_shade) + (255,), outline=outline + (200,))
-            draw.polygon(top, fill=shade(roof, 1.0 - 0.25 * b.depth) + (255,), outline=outline + (220,))
+            if sat_base is not None and self._paste_satellite_roof(canvas, sat_base, base, lift):
+                # Faint outline so the roof reads against busy imagery.
+                draw.polygon(top, outline=outline + (180,))
+            else:
+                draw.polygon(top, fill=shade(roof, 1.0 - 0.25 * b.depth) + (255,), outline=outline + (220,))
+
+    def _paste_satellite_roof(
+        self, canvas: Image.Image, sat_base: Image.Image, base: list[Point], lift: float
+    ) -> bool:
+        """Lift the satellite imagery under a footprint up to the roof.
+
+        The base is top-down, so the pixels beneath the footprint *are* the
+        roof; copying them up by ``lift`` keeps the roof registered to the
+        ground. Returns False (caller draws a palette roof) when the footprint
+        falls outside the imagery."""
+        x0 = int(min(p[0] for p in base))
+        y0 = int(min(p[1] for p in base))
+        x1 = int(max(p[0] for p in base)) + 1
+        y1 = int(max(p[1] for p in base)) + 1
+        x0c, y0c = max(0, x0), max(0, y0)
+        x1c = min(sat_base.width, x1)
+        y1c = min(sat_base.height, y1)
+        if x1c <= x0c or y1c <= y0c:
+            return False
+        patch = sat_base.crop((x0c, y0c, x1c, y1c))
+        mask = Image.new("L", patch.size, 0)
+        ImageDraw.Draw(mask).polygon([(x - x0c, y - y0c) for x, y in base], fill=255)
+        # Don't carry the base's trapezoid alpha into the roof -- a footprint at
+        # the map edge would punch a hole; the footprint mask is the only mask.
+        canvas.paste(patch.convert("RGB"), (x0c, int(y0c - lift)), mask)
+        return True
 
     def _draw_scatter(
         self, canvas: Image.Image, scale: float, kinds: set[ScatterKind] | None = None

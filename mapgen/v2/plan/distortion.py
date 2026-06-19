@@ -84,6 +84,24 @@ class ImportanceWarp:
         v = np.interp(arr[:, 1], self._grid, self._fy)
         return list(zip(u.tolist(), v.tolist()))
 
+    def unwarp_points(self, points: list[Point]) -> list[Point]:
+        """Inverse map: warped-normalized -> normalized. Each axis CDF is
+        monotonic, so the inverse is interp with the roles of grid/cdf
+        swapped. Required to register raster sources through the warp."""
+        if not points:
+            return []
+        arr = np.asarray(points, dtype=float)
+        x = np.interp(arr[:, 0], self._fx, self._grid)
+        y = np.interp(arr[:, 1], self._fy, self._grid)
+        return list(zip(x.tolist(), y.tolist()))
+
+    def to_dict(self) -> dict:
+        return {
+            "grid": self._grid.tolist(),
+            "fx": self._fx.tolist(),
+            "fy": self._fy.tolist(),
+        }
+
 
 class IdentityWarp:
     """No-op warp with the same interface."""
@@ -93,3 +111,25 @@ class IdentityWarp:
 
     def warp_points(self, points: list[Point]) -> list[Point]:
         return list(points)
+
+    def unwarp_points(self, points: list[Point]) -> list[Point]:
+        return list(points)
+
+    def to_dict(self) -> dict:
+        return {}
+
+
+def warp_from_dict(data: dict | None):
+    """Reconstruct a warp from its serialized CDFs (see ImportanceWarp.to_dict).
+
+    An empty/missing dict yields an IdentityWarp, so plans written before the
+    warp was serialized still load.
+    """
+    if not data or "fx" not in data:
+        return IdentityWarp()
+    warp = ImportanceWarp.__new__(ImportanceWarp)
+    warp.strength = 0.0  # unused once CDFs are supplied
+    warp._grid = np.asarray(data["grid"], dtype=float)
+    warp._fx = np.asarray(data["fx"], dtype=float)
+    warp._fy = np.asarray(data["fy"], dtype=float)
+    return warp
