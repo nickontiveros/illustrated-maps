@@ -94,6 +94,7 @@ class Compositor:
         self.palette = {k: hex_to_rgb(v) for k, v in plan.style.palette.items()}
         self._sprite_cache: dict[str, list[Image.Image]] = {}
         self._sat_base_cache: dict[float, Image.Image | None] = {}
+        self._relief_cache: dict[float, Image.Image | None] = {}
 
     @property
     def _satellite_mode(self) -> bool:
@@ -121,6 +122,41 @@ class Compositor:
                 logger.warning("Satellite base unavailable; falling back to illustrated land")
             self._sat_base_cache[scale] = img
         return self._sat_base_cache[scale]
+
+    def _terrain_relief(self, scale: float) -> Image.Image | None:
+        """Warped DEM hillshade for this scale, or None when disabled / flat /
+        elevation data unavailable (the relief pass is then skipped)."""
+        if not self.plan.style.terrain_relief:
+            return None
+        if scale not in self._relief_cache:
+            from .terrain_relief import TerrainReliefBuilder
+
+            img = None
+            try:
+                builder = TerrainReliefBuilder.from_plan(
+                    self.plan, cache_dir=self.assets_dir / "terrain"
+                )
+                img = builder.poster_relief(scale)
+            except Exception as exc:
+                logger.warning("Terrain relief build failed; skipping: %s", exc)
+                img = None
+            self._relief_cache[scale] = img
+        return self._relief_cache[scale]
+
+    def _apply_terrain_relief(self, canvas: Image.Image, scale: float) -> None:
+        """Multiply the painted land by the hillshade so slopes gain shadow.
+        No-op unless terrain_relief is enabled and the DEM has real range."""
+        relief = self._terrain_relief(scale)
+        if relief is None:
+            return
+        from PIL import ImageChops
+
+        strength = self.plan.style.hillshade_strength
+        base_rgb = canvas.convert("RGB")
+        multiplied = ImageChops.multiply(base_rgb, relief.convert("RGB"))
+        blended = Image.blend(base_rgb, multiplied, strength)
+        # Confine to the map trapezoid (relief alpha); paper/sky stay untouched.
+        canvas.paste(blended, (0, 0), relief.getchannel("A"))
 
     # -- asset access ------------------------------------------------------
 
@@ -183,6 +219,10 @@ class Compositor:
         else:
             self._draw_base_land(canvas, scale)
             self._draw_ground(canvas, scale, wobble)
+            # DEM hillshade multiplies the painted land (mountains gain form).
+            # Satellite imagery already carries real relief, so this is
+            # illustrated-mode only and applied before roads/buildings.
+            self._apply_terrain_relief(canvas, scale)
         self._draw_waterways(canvas, scale, wobble)
         self._draw_roads(canvas, scale, wobble)
         self._draw_buildings(canvas, scale)

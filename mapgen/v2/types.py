@@ -261,6 +261,12 @@ class StyleSpec(BaseModel):
     # Satellite tile zoom override; None lets the service auto-pick from the
     # region size (capped at Mapbox's z18).
     satellite_zoom: Optional[int] = None
+    # DEM hillshade relief multiplied under the map (great for mountainous
+    # regions). Off by default; self-disables if the elevation data is flat or
+    # the `elevation` library is unavailable.
+    terrain_relief: bool = False
+    hillshade_strength: float = Field(0.35, ge=0.0, le=1.0)
+    terrain_exaggeration: float = Field(2.0, gt=0.0)
     description: str = (
         "vintage hand-painted tourist map illustration, warm muted gouache "
         "palette, soft brushwork, 1950s travel poster feel"

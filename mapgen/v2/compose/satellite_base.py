@@ -22,7 +22,6 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 from PIL import Image
 
 from ...models.project import BoundingBox
@@ -30,16 +29,13 @@ from ..ingest import GeoFrame
 from ..plan.camera import ObliqueCamera
 from ..plan.distortion import warp_from_dict
 from ..types import CanvasSpec
+from .raster_warp import ObliqueRasterWarper
 
 logger = logging.getLogger(__name__)
 
 # Cap on the fetched ortho's long edge: Mapbox z18 already out-resolves a
 # 300-DPI poster once warped, and a larger source just slows the mesh fetch.
 _MAX_ORTHO_PX = 4096
-# Mesh grid over the poster. The oblique+warp deformation is smooth and
-# low-frequency, so a coarse grid is exact at nodes and near-exact between.
-_MESH_COLS = 80
-_MESH_ROWS = 120
 
 
 class SatelliteBaseBuilder:
@@ -63,6 +59,7 @@ class SatelliteBaseBuilder:
         self.token = token
         self.zoom = zoom
         self._env = frame.fetch_region
+        self._warper = ObliqueRasterWarper(frame, camera, canvas, warp)
         self._ortho: Optional[Image.Image] = None
 
     # -- public ----------------------------------------------------------
@@ -146,100 +143,11 @@ class SatelliteBaseBuilder:
     # -- warp ------------------------------------------------------------
 
     def _warp_to_poster(self, ortho: Image.Image, scale: float) -> Image.Image:
-        out_w = max(1, int(round(self.canvas.width_px * scale)))
-        out_h = max(1, int(round(self.canvas.height_px * scale)))
-
-        # Grid of destination (poster) node coordinates, in *unscaled* poster
-        # space so the camera math matches the plan.
-        xs = np.linspace(0.0, self.canvas.width_px, _MESH_COLS + 1)
-        ys = np.linspace(0.0, self.canvas.height_px, _MESH_ROWS + 1)
-        gx, gy = np.meshgrid(xs, ys)  # (rows+1, cols+1)
-        sx, sy = self._poster_to_ortho_px(gx, gy, ortho.size)
-
-        mesh = []
-        for r in range(_MESH_ROWS):
-            for c in range(_MESH_COLS):
-                # Destination rectangle (scaled to the output canvas). PIL needs
-                # integer destination boxes; the source quad stays float.
-                dx0, dx1 = int(round(xs[c] * scale)), int(round(xs[c + 1] * scale))
-                dy0, dy1 = int(round(ys[r] * scale)), int(round(ys[r + 1] * scale))
-                # Source quad in PIL order: UL, LL, LR, UR.
-                quad = (
-                    sx[r, c], sy[r, c],
-                    sx[r + 1, c], sy[r + 1, c],
-                    sx[r + 1, c + 1], sy[r + 1, c + 1],
-                    sx[r, c + 1], sy[r, c + 1],
-                )
-                mesh.append(((dx0, dy0, dx1, dy1), quad))
-
-        warped = ortho.transform(
-            (out_w, out_h), Image.Transform.MESH, mesh, Image.Resampling.BILINEAR
-        ).convert("RGBA")
-        warped.putalpha(self._trapezoid_mask(out_w, out_h, scale))
-        return warped
+        return self._warper.warp_to_poster(ortho, scale, trapezoid=True)
 
     def _poster_to_ortho_px(self, px, py, ortho_size):
         """Vectorized inverse map: poster px -> ortho px (NaN-safe)."""
-        cam = self.camera
-        spec = cam.spec
-        vs = spec.vertical_scale
-        # poster y -> far-near parameter t (cam.t_at_poster_y, vectorized).
-        c = np.clip((py - cam.horizon_px) / cam.map_height_px, 0.0, None) * cam._mean_scale
-        a = (1.0 - vs) / 2.0
-        if a < 1e-9:
-            t = c / max(1e-9, vs)
-        else:
-            t = (-vs + np.sqrt(vs * vs + 4.0 * a * c)) / (2.0 * a)
-        t = np.clip(t, 0.0, 1.0)
-        # flat-space coords, then warped-normalized.
-        flat_y = t * cam.flat_height
-        width_scale = spec.convergence + (1.0 - spec.convergence) * t
-        cx = cam.flat_width / 2.0
-        flat_x = cx + (px - cx) / np.where(width_scale == 0, 1e-9, width_scale)
-        wu = np.clip(flat_x / cam.flat_width, 0.0, 1.0)
-        wv = np.clip(flat_y / cam.flat_height, 0.0, 1.0)
-        # warp inverse: warped-normalized -> normalized.
-        u, v = self._unwarp(wu, wv)
-        lon, lat = self._frame_from_normalized(u, v)
-        ow, oh = ortho_size
-        ex = (lon - self._env.west) / max(1e-9, self._env.width_deg) * ow
-        ey = (self._env.north - lat) / max(1e-9, self._env.height_deg) * oh
-        return ex, ey
-
-    def _unwarp(self, wu, wv):
-        warp = self.warp
-        if not hasattr(warp, "_fx"):  # IdentityWarp
-            return wu, wv
-        u = np.interp(wu, warp._fx, warp._grid)
-        v = np.interp(wv, warp._fy, warp._grid)
-        return u, v
-
-    def _frame_from_normalized(self, u, v):
-        """Vectorized GeoFrame.from_normalized over numpy arrays."""
-        f = self.frame
-        x = f._x0 + u * (f._x1 - f._x0)
-        y = f._y0 + v * (f._y1 - f._y0)
-        e = x * f._cos_b - y * f._sin_b
-        n = -(x * f._sin_b + y * f._cos_b)
-        return (f._lon_c + e / f._kx, f._lat_c + n / f._ky)
-
-    def _trapezoid_mask(self, w: int, h: int, scale: float) -> Image.Image:
-        """Alpha mask matching the camera's converging far edge (the same
-        trapezoid _draw_base_land paints), so the sky stays empty."""
-        from PIL import ImageDraw
-
-        cam = self.camera
-        horizon = cam.spec.horizon_margin * self.canvas.height_px * scale
-        far_half = cam.spec.convergence * w / 2.0
-        poly = [
-            (w / 2 - far_half, horizon),
-            (w / 2 + far_half, horizon),
-            (w, h),
-            (0, h),
-        ]
-        mask = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(mask).polygon(poly, fill=255)
-        return mask
+        return self._warper.poster_to_source_px(px, py, ortho_size)
 
     # -- cache -----------------------------------------------------------
 
